@@ -55,12 +55,16 @@ Refresh-Path
 
 # 3) Majlis ------------------------------------------------------------------
 Step 'Downloading Majlis'
-$rel = Invoke-RestMethod 'https://api.github.com/repos/abdullah7979/majlis/releases/latest' -Headers @{ 'User-Agent' = 'majlis-installer' }
-$asset = $rel.assets | Where-Object { $_.name -like 'Majlis-Setup-*.exe' } | Select-Object -First 1
-if (-not $asset) { throw 'No installer found in the latest release.' }
-$setup = Join-Path $env:TEMP $asset.name
-Invoke-WebRequest $asset.browser_download_url -OutFile $setup -UseBasicParsing
-Write-Host "Majlis $($rel.tag_name) downloaded"
+$base = 'https://github.com/abdullah7979/majlis/releases/latest/download'
+# latest.yml (published with every release) names the current installer; no API call, no rate limit.
+$yml = (Invoke-WebRequest "$base/latest.yml" -UseBasicParsing).Content
+if ($yml -is [byte[]]) { $yml = [Text.Encoding]::UTF8.GetString($yml) }
+$name = ([regex]::Match($yml, '(?m)^path:\s*(.+)$')).Groups[1].Value.Trim()
+$version = ([regex]::Match($yml, '(?m)^version:\s*(.+)$')).Groups[1].Value.Trim()
+if (-not $name) { throw 'Could not find the latest Majlis installer.' }
+$setup = Join-Path $env:TEMP $name
+Invoke-WebRequest "$base/$name" -OutFile $setup -UseBasicParsing
+Write-Host "Majlis $version downloaded"
 
 Step 'Installing Majlis'
 Get-Process Majlis -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
