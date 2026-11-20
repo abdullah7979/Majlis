@@ -1,0 +1,26 @@
+name: Install test
+
+# Runs the real one-line installer on a clean Windows machine and checks Majlis starts.
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  install:
+    runs-on: windows-latest
+    steps:
+      - name: Run the one-line installer
+        shell: powershell
+        run: irm https://raw.githubusercontent.com/abdullah7979/majlis/main/install.ps1 | iex
+      - name: Verify installation
+        shell: powershell
+        run: |
+          $exe = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter Majlis.exe | Select-Object -First 1
+          if (-not $exe) { throw 'Majlis.exe not installed' }
+          Write-Host "Installed at $($exe.FullName)"
+          Get-Process Majlis -ErrorAction SilentlyContinue | Stop-Process -Force
+          $p = Start-Process $exe.FullName -ArgumentList '--smoke-test' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "smoke test exit $($p.ExitCode)" }
+          foreach ($c in 'claude','codex','gemini') { if (-not (Get-Command $c -ErrorAction SilentlyContinue)) { $env:Path += ";$env:APPDATA\npm" }; & $c --version }
+          if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Majlis.lnk")) { throw 'Start menu shortcut missing' }
