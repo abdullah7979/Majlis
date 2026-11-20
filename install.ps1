@@ -1,0 +1,79 @@
+# Majlis one-line installer for Windows.
+#   irm https://raw.githubusercontent.com/abdullah7979/majlis/main/install.ps1 | iex
+# Installs (only what's missing): Node.js LTS, Claude Code, Codex CLI, Gemini CLI,
+# then the latest Majlis release, and launches it.
+
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+function Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Magenta }
+function Refresh-Path {
+  $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' + [Environment]::GetEnvironmentVariable('Path', 'User')
+  $npmBin = Join-Path $env:APPDATA 'npm'
+  if ($env:Path -notlike "*$npmBin*") { $env:Path += ";$npmBin" }
+}
+
+Write-Host ''
+Write-Host '  Majlis  -  every AI you pay for, in one app' -ForegroundColor Cyan
+Write-Host '  ------------------------------------------' -ForegroundColor DarkGray
+
+# 1) Node.js -----------------------------------------------------------------
+Step 'Checking Node.js'
+Refresh-Path
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+  if (Get-Command winget -ErrorAction SilentlyContinue) {
+    Write-Host 'Installing Node.js LTS...'
+    winget install -e --id OpenJS.NodeJS.LTS --silent --accept-source-agreements --accept-package-agreements | Out-Null
+    Refresh-Path
+  }
+  if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    Write-Host 'Could not install Node.js automatically. Install it from https://nodejs.org then run this command again.' -ForegroundColor Yellow
+    Start-Process 'https://nodejs.org/en/download'
+    return
+  }
+}
+Write-Host "Node.js $(node --version)" -ForegroundColor Green
+
+# 2) Official AI CLIs ----------------------------------------------------------
+Step 'Installing the official AI tools (Claude Code, Codex, Gemini CLI)'
+$clis = @(
+  @{ bin = 'claude'; pkg = '@anthropic-ai/claude-code' },
+  @{ bin = 'codex';  pkg = '@openai/codex' },
+  @{ bin = 'gemini'; pkg = '@google/gemini-cli' }
+)
+foreach ($c in $clis) {
+  if (Get-Command $c.bin -ErrorAction SilentlyContinue) {
+    Write-Host "$($c.bin): already installed" -ForegroundColor Green
+  } else {
+    Write-Host "Installing $($c.pkg)..."
+    try { & npm install -g $c.pkg --no-fund --no-audit --loglevel=error | Out-Null; Write-Host "$($c.bin): installed" -ForegroundColor Green }
+    catch { Write-Host "$($c.bin): failed (you can install it later from Majlis > Settings)" -ForegroundColor Yellow }
+  }
+}
+Refresh-Path
+
+# 3) Majlis ------------------------------------------------------------------
+Step 'Downloading Majlis'
+$rel = Invoke-RestMethod 'https://api.github.com/repos/abdullah7979/majlis/releases/latest' -Headers @{ 'User-Agent' = 'majlis-installer' }
+$asset = $rel.assets | Where-Object { $_.name -like 'Majlis-Setup-*.exe' } | Select-Object -First 1
+if (-not $asset) { throw 'No installer found in the latest release.' }
+$setup = Join-Path $env:TEMP $asset.name
+Invoke-WebRequest $asset.browser_download_url -OutFile $setup -UseBasicParsing
+Write-Host "Majlis $($rel.tag_name) downloaded"
+
+Step 'Installing Majlis'
+Get-Process Majlis -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Process $setup -ArgumentList '/S' -Wait
+Remove-Item $setup -ErrorAction SilentlyContinue
+
+$exe = @(
+  (Join-Path $env:LOCALAPPDATA 'Programs\majlis\Majlis.exe'),
+  (Join-Path $env:LOCALAPPDATA 'Programs\Majlis\Majlis.exe')
+) | Where-Object { Test-Path $_ } | Select-Object -First 1
+
+Write-Host ''
+Write-Host '  Done! Majlis is in your Start menu and on your desktop.' -ForegroundColor Green
+Write-Host '  First launch walks you through signing in to Claude, ChatGPT and Gemini.' -ForegroundColor Gray
+Write-Host ''
+if ($exe) { Start-Process $exe }

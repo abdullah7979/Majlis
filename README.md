@@ -22,14 +22,21 @@ You have several AI subscriptions, and each one is best at something different. 
 
 ## Install
 
-1. Install **Node.js LTS** from [nodejs.org](https://nodejs.org). The official AI CLIs need it.
-2. Download **`Majlis-Setup-x.y.z.exe`** from [Releases](../../releases) (or from the latest CI run's artifacts) and run it.
-3. On first launch, Majlis walks you through it. Click **Install** and then **Sign in** for each subscription you have:
-   - **Claude**: choose *Claude account (Pro/Max)*
-   - **ChatGPT**: choose *Sign in with ChatGPT*
-   - **Gemini**: choose *Login with Google*
+Open **PowerShell** (Start menu → type `PowerShell`) and paste:
 
-You only need the subscriptions you actually have. Any provider you don't use can be turned off.
+```powershell
+irm https://raw.githubusercontent.com/abdullah7979/majlis/main/install.ps1 | iex
+```
+
+That single line installs whatever is missing — Node.js, the official Claude Code / Codex / Gemini CLIs — then Majlis itself (Start menu + desktop shortcut) and opens it. On first launch, click **Sign in** for each subscription you have:
+
+- **Claude** → choose *Claude account (Pro/Max)*
+- **ChatGPT** → choose *Sign in with ChatGPT*
+- **Gemini** → choose *Login with Google*
+
+Prefer clicking? Download `Majlis-Setup-x.y.z.exe` from [Releases](../../releases). (It isn't code-signed yet, so Windows may show “unrecognized app” → *More info* → *Run anyway*.)
+
+Majlis updates itself automatically.
 
 ## How routing works
 
