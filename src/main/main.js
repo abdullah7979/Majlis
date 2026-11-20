@@ -1,5 +1,5 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, nativeImage, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, nativeImage, Notification, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { Store } = require('../core/store');
@@ -106,9 +106,9 @@ function registerIpc() {
     return store.saveConversation(c);
   });
 
-  h('chat:send', async ({ conversationId, text, files = [], force, smart }) => {
+  h('chat:send', async ({ conversationId, text, files = [], force, smart, voice }) => {
     const attachments = files.length ? store.importAttachments(conversationId, files.filter((f) => fs.existsSync(f))) : [];
-    orch.send({ conversationId, text, attachments, force, smart }, (e) => {
+    orch.send({ conversationId, text, attachments, force, smart, voice }, (e) => {
       if (win && !win.isDestroyed()) win.webContents.send('chat:event', e);
       if ((e.type === 'done' || e.type === 'failed') && win && !win.isFocused() && Notification.isSupported()) {
         new Notification({ title: 'Majlis', body: e.type === 'done' ? `${e.label} ✓` : '✖' }).show();
@@ -128,7 +128,22 @@ function registerIpc() {
   h('providers:status', () => orch.providerStatus());
   h('providers:test', (id) => orch.test(id));
   h('providers:clear-cooldown', (id) => { store.clearCooldown(id); return true; });
-  h('providers:login', (id) => { const p = PROVIDERS[id]; if (p) openTerminal(p.loginCommand); return true; });
+  h('providers:login', (id) => {
+    const p = PROVIDERS[id]; if (!p) return false;
+    try { if (p.prepareLogin) p.prepareLogin(); } catch (_) {}
+    openTerminal(p.loginCommand);
+    return true;
+  });
+
+  // ---- voice: renderer records + encodes WAV, Gemini transcribes it
+  h('voice:transcribe', async ({ wav, language }) => {
+    const dir = path.join(store.dir, 'voice');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `rec-${Date.now()}.wav`);
+    fs.writeFileSync(file, Buffer.from(wav));
+    try { return await orch.transcribe(file, { language }); }
+    finally { fs.rm(file, { force: true }, () => {}); }
+  });
   h('providers:install', async (id) => {
     const p = PROVIDERS[id]; if (!p) return { ok: false };
     const npm = await which('npm', augmentedEnv());
@@ -182,6 +197,9 @@ app.whenReady().then(() => {
   const dataDir = process.env.MAJLIS_DATA_DIR
     || (SMOKE ? fs.mkdtempSync(path.join(app.getPath('temp'), 'majlis-smoke-')) : path.join(app.getPath('userData'), 'data'));
   store = new Store(dataDir);
+  // Microphone for voice input; nothing else.
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === 'media' || permission === 'clipboard-sanitized-write'));
+  session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'media' || permission === 'clipboard-sanitized-write');
   orch = new Orchestrator(store);
   registerIpc();
   createWindow();

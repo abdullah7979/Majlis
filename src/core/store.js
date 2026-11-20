@@ -32,7 +32,7 @@ class Store {
     this.settingsFile = path.join(dir, 'settings.json');
     this.stateFile = path.join(dir, 'state.json');
     this.settings = deepMerge(DEFAULT_SETTINGS, readJson(this.settingsFile, {}));
-    this.state = deepMerge({ cooldowns: {}, usage: {}, learning: {} }, readJson(this.stateFile, {}));
+    this.state = deepMerge({ cooldowns: {}, usage: {}, learning: {}, auth: {} }, readJson(this.stateFile, {}));
   }
 
   // ---- settings
@@ -64,6 +64,9 @@ class Store {
     u[day][provider] = (u[day][provider] || 0) + 1;
     this.saveState();
   }
+  /** Remember the last proof that a provider is (not) signed in. */
+  markAuth(provider, ok) { this.state.auth[provider] = { ok, at: Date.now() }; this.saveState(); }
+  authKnownGood(provider) { const a = this.state.auth[provider]; return !!(a && a.ok); }
   usageToday() { return this.state.usage[new Date().toISOString().slice(0, 10)] || {}; }
   addFeedback(category, provider, good) {
     const l = this.state.learning;

@@ -21,6 +21,7 @@ function installFakeClis() {
   process.env[key] = bin + path.delimiter + process.env[key];
   const log = path.join(bin, 'calls.jsonl');
   process.env.FAKE_LOG = log;
+  process.env.GEMINI_API_KEY = 'test-key'; // counts as signed in for the fake Gemini
   return {
     bin,
     calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []),

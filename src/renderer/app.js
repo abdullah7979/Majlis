@@ -114,11 +114,37 @@ async function refreshProviders() {
   const box = $('#providerDots'); box.innerHTML = '';
   for (const id of PROVIDER_IDS) {
     const p = S.providers[id]; if (!p) continue;
-    const st = !p.installed || !p.enabled ? 'off' : p.cooldownUntil ? 'cool' : 'ok';
-    const tip = st === 'cool' ? `${t('resting_until')} ${fmtTime(p.cooldownUntil)}` : st === 'ok' ? `${t('ready')} · ${p.usageToday} ${t('requests_today')}` : p.installed ? t('skipped_disabled') : t('not_installed');
+    const st = !p.installed || !p.enabled ? 'off' : p.cooldownUntil || !p.signedIn ? 'cool' : 'ok';
+    const tip = !p.signedIn && p.installed && p.enabled ? t('needs_signin') : st === 'cool' ? `${t('resting_until')} ${fmtTime(p.cooldownUntil)}` : st === 'ok' ? `${t('ready')} · ${p.usageToday} ${t('requests_today')}` : p.installed ? t('skipped_disabled') : t('not_installed');
     box.append(h('span', { class: `pdot ${st}`, title: tip, onclick: () => openSettings('providers') }, h('i'), p.label));
   }
   buildModelPicker();
+  renderAuthBanner();
+}
+
+// ------------------------------------------------------------------ sign-in
+const dismissedAuth = new Set();
+function renderAuthBanner() {
+  const box = $('#authBanner'); if (!box) return;
+  const need = PROVIDER_IDS.filter((id) => { const p = S.providers[id]; return p && p.installed && p.enabled && !p.signedIn && !dismissedAuth.has(id); });
+  box.innerHTML = '';
+  box.classList.toggle('hidden', !need.length || !S.settings || !S.settings.onboarded);
+  if (!need.length) return;
+  box.append(h('span', {}, '🔑 ', need.map((id) => S.providers[id].label).join(' · '), ` — ${t('needs_signin')}`), h('span', { class: 'grow' }));
+  for (const id of need) box.append(h('button', { onclick: () => signIn(id) }, `${t('sign_in_now')}: ${S.providers[id].label}`));
+  box.append(h('button', { class: 'x', title: t('dismiss'), onclick: () => { need.forEach((id) => dismissedAuth.add(id)); renderAuthBanner(); } }, '✕'));
+}
+/** Open the vendor's sign-in, then watch for it to complete (up to 4 minutes). */
+async function signIn(id) {
+  await api.providers.login(id);
+  toast(t(`login_hint_${id}`));
+  const until = Date.now() + 240000;
+  const poll = async () => {
+    S.providers = await api.providers.status();
+    if (S.providers[id] && S.providers[id].signedIn) { toast(`${S.providers[id].label} — ${t('signed_in_ok')}`); refreshProviders(); return; }
+    if (Date.now() < until) setTimeout(poll, 3000);
+  };
+  setTimeout(poll, 3000);
 }
 function buildModelPicker() {
   const sel = $('#modelPick'); const cur = sel.value || 'auto';
@@ -175,7 +201,7 @@ function scrollDown(force) {
 }
 function userEl(m) {
   return h('div', { class: 'msg user', 'data-id': m.id },
-    h('div', { class: 'bubble', dir: 'auto' }, m.text,
+    h('div', { class: 'bubble', dir: 'auto' }, m.voice ? h('span', { class: 'voice-tag' }, '🎙') : null, m.text,
       m.attachments && m.attachments.length ? h('div', { class: 'files' }, m.attachments.map((a) => h('span', { class: 'file-pill', title: a, onclick: () => api.shell.openPath(a) }, '📄 ' + baseName(a)))) : null));
 }
 function aiEl(m) {
@@ -194,7 +220,9 @@ function trailEl(m) {
       : kind === 'disabled' ? t('skipped_disabled') : kind === 'auth' ? t('signed_out') : kind === 'not_installed' ? t('not_installed')
       : kind === 'timeout' ? t('timeout') : t('failed');
     if (i) box.append(h('span', { class: 'arrow' }, S.lang === 'ar' ? '←' : '→'));
-    box.append(h('span', { class: `step ${kind === 'limit' || kind === 'cooldown' ? kind : 'fail'}`, title: s.message || '' }, `${modelLabel(s.provider, s.model)} · ${why}`));
+    const cls = kind === 'limit' || kind === 'cooldown' ? kind : kind === 'auth' ? 'auth' : 'fail';
+    box.append(h('span', { class: `step ${cls}`, title: s.message || (kind === 'auth' ? t('sign_in_now') : ''), onclick: kind === 'auth' ? () => signIn(s.provider) : null },
+      `${modelLabel(s.provider, s.model)} · ${why}${kind === 'auth' ? ` — ${t('sign_in_now')} ↗` : ''}`));
   });
   return box;
 }
@@ -291,7 +319,7 @@ function onChatEvent(e) {
     default: break;
   }
   queueRender(m);
-  if (['done', 'failed', 'cancelled'].includes(e.type)) updateSendButton();
+  if (['done', 'failed', 'cancelled'].includes(e.type)) { updateSendButton(); onVoiceTurnFinished(m, e.type); }
 }
 
 // ------------------------------------------------------------------ composer
@@ -309,7 +337,7 @@ function renderAttachments() {
   S.pendingFiles.forEach((f, i) => box.append(h('span', { class: 'file-pill', title: f }, '📄 ' + baseName(f),
     h('button', { onclick: () => { S.pendingFiles.splice(i, 1); renderAttachments(); } }, '✕'))));
 }
-async function sendCurrent() {
+async function sendCurrent({ voice = false } = {}) {
   if (S.conv && S.running.has(S.conv.id)) { api.chat.cancel(S.conv.id); return; }
   const text = $('#input').value.trim();
   if (!text) return;
@@ -320,7 +348,95 @@ async function sendCurrent() {
   $('#input').value = ''; S.pendingFiles = []; renderAttachments(); autoGrow();
   const force = $('#modelPick').value === 'auto' ? null : $('#modelPick').value;
   S.running.add(conv.id); updateSendButton();
-  await api.chat.send({ conversationId: conv.id, text, files, force });
+  if (voice) V.awaiting = conv.id;
+  await api.chat.send({ conversationId: conv.id, text, files, force, voice });
+}
+
+// ------------------------------------------------------------------ voice
+const V = { state: 'idle', mode: false, rec: null, awaiting: null, empties: 0 };
+function voiceSettings() { return (S.settings && S.settings.voice) || {}; }
+function setVoiceUI(state, text) {
+  V.state = state;
+  const bar = $('#voiceBar');
+  bar.classList.toggle('hidden', state === 'idle' && !V.mode);
+  bar.classList.toggle('busy', state === 'transcribing' || state === 'thinking');
+  $('#micBtn').classList.toggle('on', state === 'listening');
+  $('#voiceModeBtn').classList.toggle('on', V.mode);
+  const icons = { listening: '🎙', transcribing: '✍️', thinking: '⏳', speaking: '🔊', idle: '🎧' };
+  $('#vbIcon').textContent = icons[state] || '🎧';
+  $('#vbText').textContent = text || ({ listening: t('listening'), transcribing: t('transcribing'), thinking: t('thinking_voice'), speaking: t('speaking'), idle: t('voice_mode') })[state];
+  $('#vbStop').textContent = V.mode ? t('stop_voice') : state === 'speaking' ? t('stop_speaking') : t('stop_listening');
+  if (state !== 'listening') $$('#vbLevel i').forEach((i) => { i.style.height = ''; });
+}
+function drawLevel(level) {
+  $$('#vbLevel i').forEach((bar, i) => {
+    const wobble = 0.55 + 0.45 * Math.sin(Date.now() / 120 + i * 1.3);
+    bar.style.height = `${4 + Math.round(level * wobble * 22)}px`;
+  });
+}
+async function listen() {
+  if (V.state === 'listening') { V.rec && V.rec.stop(); return; }
+  Voice.stopSpeaking();
+  setVoiceUI('listening');
+  V.rec = new Voice.Recorder({ onLevel: drawLevel, noSpeechMs: V.mode ? 15000 : 9000 });
+  let res;
+  try { res = await V.rec.record(); }
+  catch (e) { setVoiceUI('idle'); V.mode = false; setVoiceUI('idle'); toast(t('mic_denied')); return; }
+  V.rec = null;
+  if (V.state !== 'listening') return; // cancelled meanwhile
+  if (!res.wav) {
+    if (V.mode && ++V.empties < 2) return listen();
+    V.empties = 0; V.mode = false; setVoiceUI('idle'); return;
+  }
+  V.empties = 0;
+  setVoiceUI('transcribing');
+  const r = await api.voice.transcribe({ wav: res.wav, language: S.lang });
+  if (!r.ok) {
+    V.mode = false; setVoiceUI('idle');
+    if (r.kind === 'auth' || r.kind === 'unavailable') { toast(t('voice_needs_gemini')); signIn('gemini'); }
+    else toast(t('voice_failed'));
+    return;
+  }
+  if (!r.text) { if (V.mode) return listen(); setVoiceUI('idle'); return; }
+  const input = $('#input');
+  input.value = input.value.trim() ? `${input.value.trim()} ${r.text}` : r.text;
+  autoGrow();
+  const busy = S.conv && S.running.has(S.conv.id);
+  if (!busy && (V.mode || voiceSettings().autoSend !== false)) {
+    setVoiceUI('thinking');
+    await sendCurrent({ voice: true });
+  } else {
+    setVoiceUI('idle'); input.focus();
+  }
+}
+async function onVoiceTurnFinished(m, type) {
+  if (!V.awaiting || !S.conv || V.awaiting !== S.conv.id) return;
+  V.awaiting = null;
+  if (!V.mode) { setVoiceUI('idle'); return; }
+  if (type === 'done' && voiceSettings().speakReplies !== false) {
+    setVoiceUI('speaking');
+    const r = await Voice.speak(m.text, { voiceName: voiceSettings().voiceName, rate: voiceSettings().rate || 1 });
+    if (r.reason === 'no_arabic_voice') toast(t('no_arabic_voice'));
+    if (r.stopped && !V.mode) return;
+  }
+  if (V.mode) listen(); else setVoiceUI('idle');
+}
+function toggleVoiceMode() {
+  if (V.mode) { stopVoice(); return; }
+  V.mode = true; V.empties = 0;
+  listen();
+}
+function stopVoice() {
+  V.mode = false;
+  if (V.rec) { const r = V.rec; V.rec = null; V.state = 'idle'; r.stop(); }
+  Voice.stopSpeaking();
+  V.awaiting = null;
+  setVoiceUI('idle');
+}
+function onVoiceBarButton() {
+  if (V.mode) return stopVoice();
+  if (V.state === 'listening' && V.rec) return V.rec.stop();
+  if (V.state === 'speaking') { Voice.stopSpeaking(); setVoiceUI('idle'); }
 }
 function updateWorkspaceChip() {
   const ws = S.conv ? S.conv.workspace : S.draftWorkspace;
@@ -495,6 +611,21 @@ function paneGeneral(pane) {
     field(t('close_to_tray'), toggle(s.closeToTray, (v) => saveSettings({ closeToTray: v }))),
     field(t('launch_login'), toggle(s.launchAtLogin, (v) => saveSettings({ launchAtLogin: v }))),
     field(t('shortcut'), h('input', { type: 'text', value: s.globalShortcut, dir: 'ltr', onchange: (e) => saveSettings({ globalShortcut: e.target.value.trim() }) }))));
+  const v = s.voice || {};
+  const voiceSel = h('select', { onchange: (e) => saveSettings({ voice: { voiceName: e.target.value } }) }, h('option', { value: '' }, t('voice_auto')));
+  Voice.voicesReady().then((list) => {
+    list.filter((x) => /^(ar|en)/i.test(x.lang)).sort((a, b) => (a.lang < b.lang ? -1 : 1))
+      .forEach((x) => voiceSel.append(h('option', { value: x.name }, `${x.name} (${x.lang})`)));
+    voiceSel.value = v.voiceName || '';
+  });
+  pane.append(h('h2', { style: 'margin-top:22px' }, t('voice_settings')), h('div', { class: 'card' },
+    field(t('auto_send'), toggle(v.autoSend !== false, (x) => saveSettings({ voice: { autoSend: x } }))),
+    field(t('speak_replies'), toggle(v.speakReplies !== false, (x) => saveSettings({ voice: { speakReplies: x } }))),
+    field(t('voice_pick'), h('div', { style: 'display:flex;gap:8px' }, voiceSel,
+      h('button', { class: 'btn', onclick: async () => {
+        const r = await Voice.speak(t('voice_test_text'), { voiceName: voiceSel.value });
+        if (r.reason === 'no_arabic_voice') toast(t('no_arabic_voice'));
+      } }, t('test_voice'))))));
 }
 function paneAbout(pane) {
   pane.append(h('h2', {}, 'Majlis'), h('p', { class: 'help' }, t('welcome_sub')),
@@ -557,6 +688,8 @@ async function boot() {
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') { e.preventDefault(); showWelcome(); }
     if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); openSettings(); }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'm') { e.preventDefault(); listen(); }
+    if (e.key === 'Escape' && (V.mode || V.state !== 'idle')) stopVoice();
     if (e.key === 'Escape' && !$('#overlay').classList.contains('hidden') && S.settings.onboarded) closeOverlay();
   });
   // drag & drop files anywhere on the chat
@@ -570,6 +703,9 @@ async function boot() {
     renderAttachments();
   });
 
+  $('#micBtn').onclick = () => listen();
+  $('#voiceModeBtn').onclick = toggleVoiceMode;
+  $('#vbStop').onclick = onVoiceBarButton;
   await Promise.all([refreshConvs(), refreshProviders()]);
   showWelcome();
   setInterval(refreshProviders, 60000);

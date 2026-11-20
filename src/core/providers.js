@@ -46,7 +46,8 @@ const claude = {
   bin: 'claude',
   loginCommand: 'claude',
   loginHint: 'login_hint_claude',
-  credentialFiles: [path.join(home, '.claude', '.credentials.json'), path.join(home, '.claude.json')],
+  credentialFiles: [path.join(home, '.claude', '.credentials.json')],
+  authEnv: ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'],
   models: [
     { id: 'opus', label: 'Claude Opus' },
     { id: 'sonnet', label: 'Claude Sonnet' },
@@ -94,6 +95,7 @@ const codex = {
   loginCommand: 'codex login',
   loginHint: 'login_hint_codex',
   credentialFiles: [path.join(process.env.CODEX_HOME || path.join(home, '.codex'), 'auth.json')],
+  authEnv: ['OPENAI_API_KEY'],
   models: [],
   buildArgs({ model, autonomy, outputFile, optional = true }) {
     const a = ['exec', '--skip-git-repo-check'];
@@ -124,7 +126,24 @@ const gemini = {
   bin: 'gemini',
   loginCommand: 'gemini',
   loginHint: 'login_hint_gemini',
-  credentialFiles: [path.join(home, '.gemini', 'oauth_creds.json'), path.join(home, '.gemini', 'google_accounts.json')],
+  credentialFiles: [path.join(home, '.gemini', 'oauth_creds.json')],
+  authEnv: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+  // Without oauth_creds.json a headless run can't succeed (it would try to start a browser login),
+  // so a missing file reliably means "not signed in" and we skip it instantly.
+  strictCredentials: true,
+  runEnv: { NO_BROWSER: 'true' },
+  /** Make `gemini` go straight to "Login with Google" instead of asking which auth method. */
+  prepareLogin() {
+    const file = path.join(home, '.gemini', 'settings.json');
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { /* new file */ }
+    const already = (cfg.security && cfg.security.auth && cfg.security.auth.selectedType) || cfg.selectedAuthType;
+    if (already) return;
+    cfg.security = cfg.security || {};
+    cfg.security.auth = { ...(cfg.security.auth || {}), selectedType: 'oauth-personal' };
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify(cfg, null, 2));
+  },
   models: [
     { id: 'gemini-2.5-pro', label: 'Gemini Pro' },
     { id: 'gemini-2.5-flash', label: 'Gemini Flash' },
@@ -145,6 +164,7 @@ const gemini = {
 const PROVIDERS = { claude, codex, gemini };
 
 function credentialsPresent(p) {
+  if ((p.authEnv || []).some((k) => process.env[k])) return true;
   return p.credentialFiles.some((f) => { try { return fs.statSync(f).size > 2; } catch (_) { return false; } });
 }
 

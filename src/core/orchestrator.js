@@ -37,7 +37,7 @@ class Orchestrator {
       out[p.id] = {
         id: p.id, label: p.label, vendor: p.vendor, npmPackage: p.npmPackage, loginCommand: p.loginCommand,
         installed: !!bin, path: bin, version,
-        signedIn: bin ? credentialsPresent(p) : false,
+        signedIn: bin ? credentialsPresent(p) || this.store.authKnownGood(p.id) : false,
         searched: bin ? null : searchedDirs(env),
         enabled: !!(s.providers[p.id] && s.providers[p.id].enabled),
         cooldownUntil: this.store.cooldownUntil(p.id),
@@ -54,20 +54,64 @@ class Orchestrator {
   }
 
   // ------------------------------------------------------------ routing
+  /** First usable, signed-in candidate for a background job (routing, transcription). */
+  pickHelper(candidates) {
+    return candidates.find((c) => {
+      const p = this.providers[c.provider];
+      return p && this.isUsable(c.provider) && !(p.strictCredentials && !credentialsPresent(p));
+    }) || null;
+  }
+
   async classify(text, { attachments = [], smart = true, signal } = {}) {
     const s = this.store.getSettings();
-    if (smart && s.smartRouting && this.isUsable(s.classifier.provider)) {
-      const r = await this.runOnce(s.classifier.provider, s.classifier.model, buildClassifierPrompt(text), {
+    const helper = smart && s.smartRouting ? this.pickHelper([s.classifier, { provider: 'claude', model: 'haiku' }]) : null;
+    if (helper) {
+      const r = await this.runOnce(helper.provider, helper.model, buildClassifierPrompt(text), {
         cwd: os.tmpdir(), autonomy: 'safe', timeoutMs: 45000, signal, emit: () => {},
       });
       if (r.ok) {
         const parsed = parseClassifierOutput(r.text);
         if (parsed) return parsed;
       } else if (r.failure.kind === 'limit') {
-        this.coolDown(s.classifier.provider, r.failure.resetAt);
+        this.coolDown(helper.provider, r.failure.resetAt);
       }
     }
     return heuristicClassify(text, { attachments });
+  }
+
+  /**
+   * Speech-to-text through Gemini (excellent with Arabic dialects), on the user's own subscription.
+   * @param {string} wavPath absolute path to a WAV recording
+   */
+  async transcribe(wavPath, { language = 'auto' } = {}) {
+    const s = this.store.getSettings();
+    const v = s.voice || {};
+    const helper = this.pickHelper([{ provider: 'gemini', model: v.model || '' }]);
+    if (!helper) return { ok: false, kind: this.providers.gemini && !credentialsPresent(this.providers.gemini) ? 'auth' : 'unavailable' };
+    const name = path.basename(wavPath);
+    const hint = language === 'ar' ? 'The speaker most likely speaks Arabic (often Saudi/Gulf dialect).' : 'The speaker may speak Arabic (often Saudi/Gulf dialect) or English, or mix both.';
+    const prompt = [
+      `@${name}`,
+      '',
+      `Transcribe the speech in the audio file ${name} (in the current folder; read it with your file tools if it is not attached above).`,
+      hint,
+      'Rules: write exactly what was said, in the original language and script — Arabic in Arabic script keeping the dialect words, English words in English.',
+      'Do not translate, summarize, answer, or add any preface, quotes or notes. Add normal punctuation.',
+      'If there is no intelligible speech, output exactly: [silence]',
+      'Output only the transcript.',
+    ].join('\n');
+    const r = await this.runOnce(helper.provider, helper.model, prompt, {
+      cwd: path.dirname(wavPath), autonomy: 'safe', timeoutMs: 120000, emit: () => {},
+    });
+    if (!r.ok) {
+      if (r.failure.kind === 'limit') this.coolDown(helper.provider, r.failure.resetAt);
+      return { ok: false, kind: r.failure.kind, message: r.failure.message };
+    }
+    let text = r.text.trim()
+      .replace(/^(here('s| is) (the )?transcript(ion)?:?|transcript(ion)?:)\s*/i, '')
+      .replace(/^["“”«]+|["“”»]+$/g, '').trim();
+    if (/^\[?silence\]?$/i.test(text)) text = '';
+    return { ok: true, text };
   }
 
   routeFor(category) {
@@ -88,7 +132,7 @@ class Orchestrator {
   }
 
   // ------------------------------------------------------------ prompt
-  buildPrompt(conv, text, attachments) {
+  buildPrompt(conv, text, attachments, { voice = false } = {}) {
     const s = this.store.getSettings();
     const prior = conv.messages.filter((m) => m.text && (m.role === 'user' || m.status === 'done')).slice(-s.historyTurns * 2);
     let ctx = '';
@@ -106,6 +150,11 @@ class Orchestrator {
     }
     if (attachments.length) {
       prompt += 'The user attached these files (read them from disk):\n' + attachments.map((a) => `- ${a}`).join('\n') + '\n\n';
+    }
+    if (voice) {
+      prompt += '(The user is talking to you by voice — this message is a speech transcript and your answer will be read aloud. ' +
+        'Reply the way you would in a natural spoken conversation, in the same language and dialect the user used. ' +
+        'Keep it short unless the task needs more, but still do the complete task, including any files or code.)\n\n';
     }
     prompt += (ctx ? '### NEW USER MESSAGE\n' : '') + text;
     return prompt;
@@ -129,7 +178,7 @@ class Orchestrator {
       let errBuf = '';
       const bin = (await which(p.bin)) || p.bin; // full path avoids PATH differences between shells
       const r = await run(bin, args, {
-        cwd, input: prompt, timeoutMs, signal,
+        cwd, input: prompt, timeoutMs, signal, env: p.runEnv ? augmentedEnv(p.runEnv) : undefined,
         onStdout: (d) => parser.feed(d),
         onStderr: (d) => {
           if (!p.stderrToActivity) return;
@@ -168,7 +217,7 @@ class Orchestrator {
    * opts: { conversationId, text, attachments: [absolute paths], force: 'provider|model' | null, smart }
    */
   async send(opts, emit) {
-    const { conversationId, text, force, smart = true } = opts;
+    const { conversationId, text, force, smart = true, voice = false } = opts;
     const conv = this.store.getConversation(conversationId);
     if (!conv) throw new Error('conversation not found');
     if (this.active.has(conversationId)) throw new Error('busy');
@@ -179,8 +228,8 @@ class Orchestrator {
     const cwd = conv.workspace && fs.existsSync(conv.workspace) ? conv.workspace : this.store.attachmentDir(conversationId);
     fs.mkdirSync(cwd, { recursive: true });
 
-    const prompt = this.buildPrompt(conv, text, attachments);
-    const userMsg = { id: this.store.newId(), role: 'user', text, attachments, ts: Date.now() };
+    const prompt = this.buildPrompt(conv, text, attachments, { voice });
+    const userMsg = { id: this.store.newId(), role: 'user', text, attachments, voice: !!voice, ts: Date.now() };
     const aiMsg = { id: this.store.newId(), role: 'assistant', text: '', status: 'running', ts: Date.now(), trail: [], activity: [] };
     conv.messages.push(userMsg, aiMsg);
     if (!conv.title) conv.title = text.replace(/\s+/g, ' ').slice(0, 60);
@@ -214,6 +263,11 @@ class Orchestrator {
           send({ type: 'skip', provider: step.provider, model: step.model, why, until: this.store.cooldownUntil(step.provider) });
           continue;
         }
+        if (p.strictCredentials && !credentialsPresent(p)) {
+          aiMsg.trail.push({ provider: step.provider, model: step.model, outcome: 'auth' });
+          send({ type: 'fallback', provider: step.provider, label: p.label, kind: 'auth' });
+          continue;
+        }
         send({ type: 'start', provider: step.provider, label: p.label, model: step.model });
         aiMsg.text = '';
         const r = await this.runOnce(step.provider, step.model, prompt, {
@@ -226,6 +280,7 @@ class Orchestrator {
         });
         if (r.ok) {
           this.store.countUsage(step.provider);
+          if (!this.store.authKnownGood(step.provider)) this.store.markAuth(step.provider, true);
           Object.assign(aiMsg, { text: r.text, status: 'done', provider: step.provider, providerLabel: p.label, model: r.model });
           aiMsg.trail.push({ provider: step.provider, model: r.model, outcome: 'ok' });
           this.store.saveConversation(conv);
@@ -236,6 +291,7 @@ class Orchestrator {
         if (f.kind === 'cancelled') break;
         let until = null;
         if (f.kind === 'limit') until = this.coolDown(step.provider, f.resetAt);
+        if (f.kind === 'auth') this.store.markAuth(step.provider, false);
         aiMsg.trail.push({ provider: step.provider, model: step.model, outcome: f.kind, until, message: f.message });
         send({ type: 'fallback', provider: step.provider, label: p.label, kind: f.kind, until, message: f.message });
       }
@@ -262,7 +318,8 @@ class Orchestrator {
       cwd: os.tmpdir(), autonomy: 'safe', timeoutMs: 120000, emit: () => {},
     });
     if (!r.ok && r.failure.kind === 'limit') this.coolDown(providerId, r.failure.resetAt);
-    if (r.ok) this.store.clearCooldown(providerId);
+    if (r.ok) { this.store.clearCooldown(providerId); this.store.markAuth(providerId, true); }
+    if (!r.ok && r.failure.kind === 'auth') this.store.markAuth(providerId, false);
     return r.ok ? { ok: true, text: r.text.slice(0, 200) } : { ok: false, kind: r.failure.kind, message: r.failure.message };
   }
 }

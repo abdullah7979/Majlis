@@ -29,6 +29,7 @@
       <button id="wsChip" class="chip ws-chip"><span class="ico">📁</span><span id="wsLabel"></span></button>
       <div id="updateBar" class="update-bar hidden"></div>
     </header>
+    <div id="authBanner" class="auth-banner hidden"></div>
 
     <section id="messages">
       <div id="welcome" class="welcome">
@@ -44,11 +45,18 @@
     </section>
 
     <footer class="composer-wrap">
+      <div id="voiceBar" class="voice-bar hidden">
+        <div class="vb-state"><span id="vbIcon">🎙</span><span id="vbText"></span></div>
+        <div id="vbLevel" class="vb-level"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <button id="vbStop" class="vb-stop"></button>
+      </div>
       <div id="composer" class="composer">
         <div id="attachList" class="attach-list"></div>
         <textarea id="input" rows="1" data-i18n-ph="placeholder"></textarea>
         <div class="composer-bar">
           <button id="attachBtn" class="icon-btn" data-i18n-title="attach">📎</button>
+          <button id="micBtn" class="icon-btn mic" data-i18n-title="mic_title">🎙</button>
+          <button id="voiceModeBtn" class="voice-mode" data-i18n-title="voice_mode_title"><span class="ico">🎧</span><span data-i18n="voice_mode"></span></button>
           <select id="modelPick" class="model-pick"></select>
           <div class="grow"></div>
           <button id="sendBtn" class="send-btn" data-i18n-title="send">↑</button>
@@ -66,6 +74,7 @@
 <script src="../../node_modules/dompurify/dist/purify.min.js"></script>
 <script src="../../node_modules/@highlightjs/cdn-assets/highlight.min.js"></script>
 <script src="i18n.js"></script>
+<script src="voice.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

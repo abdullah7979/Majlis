@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('majlis', {
     install: invoke('providers:install'), clearCooldown: invoke('providers:clear-cooldown'), onInstallLog: on('providers:install-log'),
   },
   system: { checkNode: invoke('system:check-node') },
+  voice: { transcribe: invoke('voice:transcribe') },
   dialog: { pickFolder: invoke('dialog:pick-folder'), pickFiles: invoke('dialog:pick-files') },
   shell: { openExternal: invoke('shell:open-external'), openPath: invoke('shell:open-path') },
   pathForFile: (file) => { try { return webUtils.getPathForFile(file); } catch (_) { return file.path || ''; } },

@@ -17,6 +17,8 @@ const AUTH_PATTERNS = [
   /not (logged|signed) in/i, /please (log|sign) ?in/i, /\/login\b/, /unauthori[sz]ed/i, /\b401\b/,
   /invalid (api key|x-api-key|credentials|token)/i, /authenticat(e|ion) (required|failed)/i,
   /run `?(codex|claude|gemini) login/i, /OAuth token (has )?expired/i, /credentials? (not found|missing)/i,
+  /auth(entication)? method/i, /GEMINI_API_KEY/, /GOOGLE_GENAI_USE_VERTEXAI/, /login required/i, /waiting for auth/i,
+  /sign in with google/i, /refresh token/i, /invalid_grant/i,
 ];
 const NOT_INSTALLED_PATTERNS = [/is not recognized as an internal or external command/i, /command not found/i, /\bENOENT\b/, /No such file or directory/i];
 const BAD_MODEL_PATTERNS = [

@@ -13,6 +13,7 @@ You have several AI subscriptions, and each one is best at something different. 
 - **Automatic fallback**: when a model hits its usage limit, Majlis parks it until its quota resets, then continues **the same conversation** on the next model, with the full context.
 - **Uses your subscriptions, not API keys**: everything runs through each vendor's official CLI (Claude Code, Codex CLI, Gemini CLI) signed in with your own account. There are no extra costs and no scraping.
 - **Works on your projects**: pick a project folder and the models can read and edit its files directly. You choose how much they're allowed to do.
+- **Talk to it**: press 🎙 (or `Ctrl+M`) and speak. Gemini transcribes accurately, including Arabic dialects. **Voice chat** 🎧 makes it hands-free: you talk, the answer is read aloud, and it keeps listening, while the models still do the full task (code, files, research).
 - **Learns your taste**: 👍 / 👎 on any answer re-orders the routes over time.
 - **Feels native**: a real Windows app with an installer, tray icon, global shortcut (`Ctrl+Shift+Space`), notifications, drag-and-drop attachments, saved conversations, full Arabic (RTL) and English UI, and auto-updates.
 

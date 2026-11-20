@@ -30,6 +30,13 @@ const DEFAULT_SETTINGS = {
   providers: { claude: { enabled: true }, codex: { enabled: true }, gemini: { enabled: true } },
   customModels: { claude: [], codex: [], gemini: [] },
   routes: DEFAULT_ROUTES,
+  voice: {
+    model: 'gemini-2.5-flash', // transcription model (falls back to Gemini's default if renamed)
+    autoSend: true,            // send as soon as you stop talking
+    speakReplies: true,        // in voice conversation mode, read answers aloud
+    voiceName: '',             // preferred system voice ('' = best Arabic/English voice available)
+    rate: 1,
+  },
 };
 
 module.exports = { CATEGORIES, DEFAULT_ROUTES, DEFAULT_SETTINGS };

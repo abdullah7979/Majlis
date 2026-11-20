@@ -23,6 +23,12 @@ function main() {
   const model = arg('--model') || arg('-m') || '';
   const tail = input.trim().split('\n').pop();
 
+  if (input.includes('Transcribe the speech')) {
+    const m = input.match(/^@(\S+)/);
+    if (!m || !fs.existsSync(m[1])) { console.error('file not found in cwd'); process.exit(1); }
+    console.log(process.env.FAKE_TRANSCRIPT || 'Here is the transcript: "ابني لي صفحة هبوط لمطعمي"');
+    return;
+  }
   if (input.includes('You are a router')) {
     console.log(`{"category":"${process.env.FAKE_CLASSIFY || 'quick'}","reason":"fake"}`);
     return;

@@ -169,3 +169,31 @@ test('provider status detects installed fake CLIs and versions', async () => {
     assert.equal(st[id].version, '9.9.9');
   }
 });
+
+test('voice: transcribes a recording through Gemini and cleans the output', async () => {
+  const { orch, store } = setup();
+  const dir = path.join(store.dir, 'voice'); fs.mkdirSync(dir, { recursive: true });
+  const wav = path.join(dir, 'rec-1.wav'); fs.writeFileSync(wav, Buffer.alloc(64));
+  const r = await orch.transcribe(wav);
+  assert.deepEqual(r, { ok: true, text: 'ابني لي صفحة هبوط لمطعمي' });
+  const call = fake.calls().find((c) => c.name === 'gemini');
+  assert.equal(fs.realpathSync(call.cwd), fs.realpathSync(dir));
+  process.env.FAKE_TRANSCRIPT = '[silence]';
+  assert.deepEqual(await orch.transcribe(wav), { ok: true, text: '' });
+});
+
+test('signed-out Gemini is skipped instantly and voice reports auth', async () => {
+  const { orch, conv, store } = setup({ smartRouting: false });
+  const saved = process.env.GEMINI_API_KEY; delete process.env.GEMINI_API_KEY;
+  const os = require('os'); const savedHome = process.env.HOME; const savedUP = process.env.USERPROFILE;
+  try {
+    const { msg, events } = await send(orch, conv, 'hi');  // quick -> gemini first
+    assert.ok(events.some((e) => e.type === 'fallback' && e.provider === 'gemini' && e.kind === 'auth'));
+    if (!fs.existsSync(path.join(os.homedir(), '.gemini', 'oauth_creds.json'))) {
+      assert.ok(!fake.calls().some((c) => c.name === 'gemini'));
+      const wav = path.join(store.dir, 'x.wav'); fs.writeFileSync(wav, Buffer.alloc(8));
+      assert.equal((await orch.transcribe(wav)).kind, 'auth');
+    }
+    assert.equal(msg.provider, 'claude');
+  } finally { process.env.GEMINI_API_KEY = saved; process.env.HOME = savedHome; process.env.USERPROFILE = savedUP; }
+});
