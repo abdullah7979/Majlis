@@ -1,0 +1,195 @@
+'use strict';
+const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, nativeImage, Notification } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const { Store } = require('../core/store');
+const { Orchestrator } = require('../core/orchestrator');
+const { PROVIDERS } = require('../core/providers');
+const { run, openTerminal, augmentedEnv, which } = require('../core/shell');
+const { CATEGORIES } = require('../core/defaults');
+
+const SMOKE = process.argv.includes('--smoke-test');
+const ICON = path.join(__dirname, '..', '..', 'build', 'icon.png');
+
+if (!SMOKE && !app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
+
+let win = null, tray = null, store, orch, quitting = false;
+
+function createWindow() {
+  win = new BrowserWindow({
+    width: 1280, height: 820, minWidth: 880, minHeight: 560,
+    backgroundColor: '#0b0d12',
+    title: 'Majlis',
+    icon: ICON,
+    show: false,
+    autoHideMenuBar: true,
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      spellcheck: false,
+    },
+  });
+  win.setMenuBarVisibility(false);
+  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  win.once('ready-to-show', () => { if (!SMOKE) win.show(); });
+  win.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:/.test(url)) shell.openExternal(url); return { action: 'deny' }; });
+  win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith('file:')) { e.preventDefault(); shell.openExternal(url); } });
+  win.on('close', (e) => {
+    if (!quitting && store.getSettings().closeToTray && tray) { e.preventDefault(); win.hide(); }
+  });
+}
+
+function toggleWindow() {
+  if (!win) return;
+  if (win.isVisible() && win.isFocused()) win.hide();
+  else { win.show(); if (win.isMinimized()) win.restore(); win.focus(); win.webContents.send('app:focus-input'); }
+}
+
+function setupTray() {
+  try {
+    const img = nativeImage.createFromPath(ICON).resize({ width: 16, height: 16 });
+    tray = new Tray(img);
+    tray.setToolTip('Majlis');
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: 'Open Majlis', click: () => { win.show(); win.focus(); } },
+      { label: 'New conversation', click: () => { win.show(); win.webContents.send('app:new-conversation'); } },
+      { type: 'separator' },
+      { label: 'Quit', click: () => { quitting = true; app.quit(); } },
+    ]));
+    tray.on('click', toggleWindow);
+  } catch (_) { tray = null; }
+}
+
+function applySystemSettings() {
+  const s = store.getSettings();
+  globalShortcut.unregisterAll();
+  if (s.globalShortcut) { try { globalShortcut.register(s.globalShortcut, toggleWindow); } catch (_) {} }
+  if (process.platform === 'win32' || process.platform === 'darwin') {
+    try { app.setLoginItemSettings({ openAtLogin: !!s.launchAtLogin }); } catch (_) {}
+  }
+}
+
+function setupUpdater() {
+  if (!app.isPackaged || SMOKE) return;
+  try {
+    const { autoUpdater } = require('electron-updater');
+    autoUpdater.autoDownload = true;
+    autoUpdater.on('update-downloaded', (info) => win && win.webContents.send('app:update', { state: 'ready', version: info.version }));
+    autoUpdater.on('update-available', (info) => win && win.webContents.send('app:update', { state: 'downloading', version: info.version }));
+    autoUpdater.on('error', () => {});
+    autoUpdater.checkForUpdates().catch(() => {});
+    setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 6 * 3600e3);
+    ipcMain.handle('app:install-update', () => { quitting = true; autoUpdater.quitAndInstall(); });
+  } catch (_) {}
+}
+
+// ------------------------------------------------------------------ IPC
+function registerIpc() {
+  const h = (ch, fn) => ipcMain.handle(ch, async (_e, ...a) => fn(...a));
+
+  h('app:info', () => ({ version: app.getVersion(), platform: process.platform, locale: app.getLocale(), dataDir: store.dir, categories: CATEGORIES, packaged: app.isPackaged }));
+  h('settings:get', () => store.getSettings());
+  h('settings:set', (patch) => { const s = store.updateSettings(patch); applySystemSettings(); return s; });
+  h('settings:reset-routes', () => store.resetRoutes());
+
+  h('conv:list', () => store.listConversations());
+  h('conv:get', (id) => store.getConversation(id));
+  h('conv:create', (opts) => store.createConversation(opts || {}));
+  h('conv:delete', (id) => { orch.cancel(id); store.deleteConversation(id); return true; });
+  h('conv:update', (id, patch) => {
+    const c = store.getConversation(id); if (!c) return null;
+    if (typeof patch.title === 'string') c.title = patch.title.slice(0, 120);
+    if (typeof patch.workspace === 'string') c.workspace = patch.workspace;
+    return store.saveConversation(c);
+  });
+
+  h('chat:send', async ({ conversationId, text, files = [], force, smart }) => {
+    const attachments = files.length ? store.importAttachments(conversationId, files.filter((f) => fs.existsSync(f))) : [];
+    orch.send({ conversationId, text, attachments, force, smart }, (e) => {
+      if (win && !win.isDestroyed()) win.webContents.send('chat:event', e);
+      if ((e.type === 'done' || e.type === 'failed') && win && !win.isFocused() && Notification.isSupported()) {
+        new Notification({ title: 'Majlis', body: e.type === 'done' ? `${e.label} ✓` : '✖' }).show();
+      }
+    }).catch((err) => win && win.webContents.send('chat:event', { conversationId, type: 'failed', error: String(err.message || err) }));
+    return true;
+  });
+  h('chat:cancel', (id) => { orch.cancel(id); return true; });
+  h('chat:feedback', ({ category, provider, good, conversationId, messageId }) => {
+    if (CATEGORIES.includes(category)) store.addFeedback(category, provider, good);
+    const c = store.getConversation(conversationId);
+    const m = c && c.messages.find((x) => x.id === messageId);
+    if (m) { m.feedback = good ? 1 : -1; store.saveConversation(c); }
+    return true;
+  });
+
+  h('providers:status', () => orch.providerStatus());
+  h('providers:test', (id) => orch.test(id));
+  h('providers:clear-cooldown', (id) => { store.clearCooldown(id); return true; });
+  h('providers:login', (id) => { const p = PROVIDERS[id]; if (p) openTerminal(p.loginCommand); return true; });
+  h('providers:install', async (id) => {
+    const p = PROVIDERS[id]; if (!p) return { ok: false };
+    const npm = await which('npm', augmentedEnv());
+    if (!npm) return { ok: false, reason: 'no_node' };
+    const r = await run('npm', ['install', '-g', p.npmPackage], {
+      timeoutMs: 10 * 60e3,
+      onStdout: (d) => win.webContents.send('providers:install-log', { id, text: d }),
+      onStderr: (d) => win.webContents.send('providers:install-log', { id, text: d }),
+    });
+    return { ok: r.code === 0, log: (r.stderr || r.stdout).slice(-1500) };
+  });
+  h('system:check-node', async () => {
+    const env = augmentedEnv();
+    const node = await which('node', env);
+    if (!node) return { installed: false };
+    const r = await run('node', ['--version'], { env, timeoutMs: 10000 });
+    return { installed: true, version: r.stdout.trim() };
+  });
+
+  h('dialog:pick-folder', async () => {
+    const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] });
+    return r.canceled ? null : r.filePaths[0];
+  });
+  h('dialog:pick-files', async () => {
+    const r = await dialog.showOpenDialog(win, { properties: ['openFile', 'multiSelections'] });
+    return r.canceled ? [] : r.filePaths;
+  });
+  h('shell:open-external', (url) => { if (/^https:\/\//.test(url)) shell.openExternal(url); return true; });
+  h('shell:open-path', (p) => { if (p && fs.existsSync(p)) shell.openPath(p); return true; });
+  h('app:smoke-ok', () => {
+    const cap = process.argv.find((a) => a.startsWith('--capture='));
+    if (cap) { // dev: screenshot after optional JS, used for README / CI artifacts
+      const js = process.env.MAJLIS_CAPTURE_JS || '';
+      setTimeout(async () => {
+        if (js) await win.webContents.executeJavaScript(js).catch((e) => console.error(e));
+        setTimeout(async () => { fs.writeFileSync(cap.slice(10), (await win.webContents.capturePage()).toPNG()); app.exit(0); }, 1500);
+      }, 800);
+      return true;
+    }
+    if (SMOKE) { console.log('SMOKE_OK'); quitting = true; setTimeout(() => app.exit(0), 200); } return true; });
+}
+
+// ------------------------------------------------------------------ boot
+app.on('second-instance', () => { if (win) { win.show(); win.focus(); } });
+app.on('before-quit', () => { quitting = true; });
+app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+
+app.whenReady().then(() => {
+  if (process.platform === 'win32') app.setAppUserModelId('com.abdullah7979.majlis');
+  const dataDir = process.env.MAJLIS_DATA_DIR
+    || (SMOKE ? fs.mkdtempSync(path.join(app.getPath('temp'), 'majlis-smoke-')) : path.join(app.getPath('userData'), 'data'));
+  store = new Store(dataDir);
+  orch = new Orchestrator(store);
+  registerIpc();
+  createWindow();
+  if (!SMOKE) { setupTray(); applySystemSettings(); setupUpdater(); }
+  if (SMOKE) {
+    setTimeout(() => { console.error('SMOKE_TIMEOUT'); app.exit(1); }, 45000);
+    win.webContents.on('console-message', (...a) => { const msg = a[0] && a[0].message ? a[0].message : a[2]; if (/error/i.test(String(msg))) console.error('RENDERER:', msg); });
+    win.webContents.on('preload-error', (_e, p, err) => { console.error('PRELOAD_ERROR', err); app.exit(1); });
+    win.webContents.on('render-process-gone', () => { console.error('RENDERER_GONE'); app.exit(1); });
+  }
+});

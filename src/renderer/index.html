@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file:; font-src 'self' data:;">
+<title>Majlis</title>
+<link rel="stylesheet" href="../../node_modules/@highlightjs/cdn-assets/styles/github-dark.min.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="brand">
+      <img src="../../build/icon.png" alt="">
+      <span>Majlis</span>
+    </div>
+    <button id="newChat" class="btn-new"><span class="ico">＋</span><span data-i18n="new_chat"></span></button>
+    <input id="search" class="search" data-i18n-ph="search">
+    <nav id="convList"></nav>
+    <div class="side-foot">
+      <div id="providerDots" class="provider-dots"></div>
+      <button id="openSettings" class="btn-ghost"><span class="ico">⚙</span><span data-i18n="settings"></span></button>
+    </div>
+  </aside>
+
+  <main id="chat">
+    <header class="chat-head">
+      <input id="convTitle" class="conv-title" spellcheck="false">
+      <button id="wsChip" class="chip ws-chip"><span class="ico">📁</span><span id="wsLabel"></span></button>
+      <div id="updateBar" class="update-bar hidden"></div>
+    </header>
+
+    <section id="messages">
+      <div id="welcome" class="welcome">
+        <img src="../../build/icon.png" alt="" class="welcome-logo">
+        <h1 data-i18n="welcome_title"></h1>
+        <p data-i18n="welcome_sub"></p>
+        <div class="examples">
+          <button data-ex="ex1"></button><button data-ex="ex2"></button>
+          <button data-ex="ex3"></button><button data-ex="ex4"></button>
+        </div>
+      </div>
+      <div id="thread"></div>
+    </section>
+
+    <footer class="composer-wrap">
+      <div id="composer" class="composer">
+        <div id="attachList" class="attach-list"></div>
+        <textarea id="input" rows="1" data-i18n-ph="placeholder"></textarea>
+        <div class="composer-bar">
+          <button id="attachBtn" class="icon-btn" data-i18n-title="attach">📎</button>
+          <select id="modelPick" class="model-pick"></select>
+          <div class="grow"></div>
+          <button id="sendBtn" class="send-btn" data-i18n-title="send">↑</button>
+        </div>
+      </div>
+      <div id="dropHint" class="drop-hint hidden" data-i18n="drop_here"></div>
+    </footer>
+  </main>
+</div>
+
+<div id="overlay" class="overlay hidden"></div>
+<div id="toast" class="toast hidden"></div>
+
+<script src="../../node_modules/marked/lib/marked.umd.js"></script>
+<script src="../../node_modules/dompurify/dist/purify.min.js"></script>
+<script src="../../node_modules/@highlightjs/cdn-assets/highlight.min.js"></script>
+<script src="i18n.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

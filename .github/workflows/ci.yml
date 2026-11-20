@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Engine tests (real CLI spawning against fake claude/codex/gemini)
+        run: npm test
+      - name: App smoke test (Windows)
+        if: runner.os == 'Windows'
+        run: npx electron . --smoke-test
+      - name: App smoke test (Linux, virtual display)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npx electron . --smoke-test --no-sandbox
+
+  build:
+    name: Windows installer
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run dist
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Majlis-Setup
+          path: dist/*.exe
+          retention-days: 14
