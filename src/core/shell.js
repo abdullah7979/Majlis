@@ -3,12 +3,43 @@
 // which Node can only launch through cmd.exe — so we use shell:true there and
 // quote arguments ourselves. On macOS/Linux we spawn directly (no shell).
 
-const { spawn, execFile } = require('child_process');
+const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const isWin = process.platform === 'win32';
+
+let npmPrefixCache = null;
+/** npm's global install folder (where `npm i -g` puts claude/codex/gemini). Cached. */
+function npmGlobalDirs() {
+  const dirs = [];
+  if (npmPrefixCache === null) {
+    npmPrefixCache = '';
+    try {
+      const { execSync } = require('child_process');
+      npmPrefixCache = String(execSync('npm config get prefix', { env: baseEnv(), windowsHide: true, timeout: 15000, stdio: ['ignore', 'pipe', 'ignore'] })).trim();
+    } catch (_) { /* npm missing */ }
+  }
+  if (npmPrefixCache) dirs.push(isWin ? npmPrefixCache : path.join(npmPrefixCache, 'bin'));
+  return dirs;
+}
+
+function baseEnv() {
+  const env = { ...process.env };
+  const key = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH';
+  const dirs = (env[key] || '').split(path.delimiter).filter(Boolean);
+  const add = [];
+  if (isWin) {
+    if (env.APPDATA) add.push(path.join(env.APPDATA, 'npm'));
+    if (env.ProgramFiles) add.push(path.join(env.ProgramFiles, 'nodejs'));
+    if (env.LOCALAPPDATA) add.push(path.join(env.LOCALAPPDATA, 'Programs', 'nodejs'));
+    if (env.NVM_SYMLINK) add.push(env.NVM_SYMLINK);
+  }
+  for (const d of add) if (!dirs.includes(d)) dirs.push(d);
+  env[key] = dirs.join(path.delimiter);
+  return env;
+}
 
 /** PATH augmented with the usual places npm puts global binaries. */
 function augmentedEnv(extra = {}) {
@@ -20,12 +51,13 @@ function augmentedEnv(extra = {}) {
     if (env.APPDATA) add.push(path.join(env.APPDATA, 'npm'));
     if (env.ProgramFiles) add.push(path.join(env.ProgramFiles, 'nodejs'));
     if (env.LOCALAPPDATA) add.push(path.join(env.LOCALAPPDATA, 'Programs', 'nodejs'));
+    if (env.NVM_SYMLINK) add.push(env.NVM_SYMLINK);
   } else {
     const home = os.homedir();
     add.push('/usr/local/bin', '/opt/homebrew/bin', path.join(home, '.npm-global', 'bin'),
       path.join(home, '.local', 'bin'), path.join(home, '.volta', 'bin'));
   }
-  for (const d of add) if (!dirs.includes(d)) dirs.push(d);
+  for (const d of [...add, ...npmGlobalDirs()]) if (d && !dirs.some((x) => samePath(x, d))) dirs.push(d);
   env[key] = dirs.join(path.delimiter);
   env.FORCE_COLOR = '0';
   env.NO_COLOR = '1';
@@ -94,18 +126,30 @@ function killTree(child) {
   }
 }
 
-/** Locate an executable on PATH. Resolves to the full path or null. */
-function which(name, env = augmentedEnv()) {
-  return new Promise((resolve) => {
-    const tool = isWin ? 'where' : 'which';
-    execFile(tool, [name], { env, windowsHide: true }, (err, out) => {
-      if (err || !out) return resolve(null);
-      const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-      const pick = isWin ? (lines.find((l) => /\.(cmd|exe|bat)$/i.test(l)) || lines[0]) : lines[0];
-      resolve(pick && fs.existsSync(pick) ? pick : null);
-    });
-  });
+const samePath = (a, b) => (isWin ? a.replace(/[\\/]+$/, '').toLowerCase() === b.replace(/[\\/]+$/, '').toLowerCase() : a.replace(/\/+$/, '') === b.replace(/\/+$/, ''));
+
+function pathDirs(env = augmentedEnv()) {
+  const key = Object.keys(env).find((k) => k.toLowerCase() === 'path') || 'PATH';
+  return (env[key] || '').split(path.delimiter).map((d) => d.trim().replace(/^"(.*)"$/, '$1')).filter(Boolean);
 }
+
+/**
+ * Locate an executable by looking in every PATH folder ourselves (no `where`/`which`,
+ * which behave differently across shells). Resolves to the full path or null.
+ */
+function which(name, env = augmentedEnv()) {
+  const exts = isWin ? ['.cmd', '.exe', '.bat', '.com'] : [''];
+  for (const dir of pathDirs(env)) {
+    for (const ext of exts) {
+      const f = path.join(dir, name + ext);
+      try { if (fs.statSync(f).isFile()) return Promise.resolve(f); } catch (_) { /* keep looking */ }
+    }
+  }
+  return Promise.resolve(null);
+}
+
+/** Folders searched, for diagnostics shown in the UI when a tool isn't found. */
+function searchedDirs(env = augmentedEnv()) { return pathDirs(env); }
 
 /** Open a visible terminal window running `commandLine` (for interactive logins). */
 function openTerminal(commandLine, cwd) {
@@ -121,4 +165,4 @@ function openTerminal(commandLine, cwd) {
   }
 }
 
-module.exports = { run, which, openTerminal, augmentedEnv, quoteWin, isWin, killTree };
+module.exports = { run, which, searchedDirs, npmGlobalDirs, openTerminal, augmentedEnv, quoteWin, isWin, killTree };

@@ -5,7 +5,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { run, which, augmentedEnv } = require('./shell');
+const { run, which, searchedDirs, augmentedEnv } = require('./shell');
 const { PROVIDERS, credentialsPresent } = require('./providers');
 const { classifyFailure, looksLikeLimitNotice } = require('./errors');
 const { heuristicClassify, buildClassifierPrompt, parseClassifierOutput } = require('./classifier');
@@ -31,13 +31,14 @@ class Orchestrator {
       const bin = await which(p.bin, env);
       let version = null;
       if (bin) {
-        const r = await run(p.bin, ['--version'], { env, timeoutMs: 15000 });
+        const r = await run(bin, ['--version'], { env, timeoutMs: 15000 });
         version = (r.stdout.match(/\d+\.\d+\.\d+[\w.-]*/) || [null])[0];
       }
       out[p.id] = {
         id: p.id, label: p.label, vendor: p.vendor, npmPackage: p.npmPackage, loginCommand: p.loginCommand,
         installed: !!bin, path: bin, version,
         signedIn: bin ? credentialsPresent(p) : false,
+        searched: bin ? null : searchedDirs(env),
         enabled: !!(s.providers[p.id] && s.providers[p.id].enabled),
         cooldownUntil: this.store.cooldownUntil(p.id),
         usageToday: usage[p.id] || 0,
@@ -126,7 +127,8 @@ class Orchestrator {
         else if (e.type === 'meta') emit({ type: 'meta', model: e.model });
       });
       let errBuf = '';
-      const r = await run(p.bin, args, {
+      const bin = (await which(p.bin)) || p.bin; // full path avoids PATH differences between shells
+      const r = await run(bin, args, {
         cwd, input: prompt, timeoutMs, signal,
         onStdout: (d) => parser.feed(d),
         onStderr: (d) => {

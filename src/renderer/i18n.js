@@ -43,6 +43,8 @@ window.I18N = {
     ob_note: 'Everything runs through each vendor’s official CLI on your own subscription. No API keys, no extra cost. Your conversations stay on this PC.',
     rename: 'Rename', delete: 'Delete', confirm_delete: 'Delete this conversation?', you: 'You',
     no_provider_ready: 'No model is ready yet — open Settings → Models to install and sign in.',
+    diag_title: 'Details (send this to support)', diag_searched: 'Looked in',
+    installed_not_found: 'npm finished, but the tool still can’t be found. Restart Majlis; if it persists, open the details below.',
   },
   ar: {
     dir: 'rtl',
@@ -86,5 +88,7 @@ window.I18N = {
     ob_note: 'كل شيء يشتغل عن طريق الأداة الرسمية لكل شركة وباشتراكك أنت. بدون مفاتيح API وبدون أي تكلفة إضافية. ومحادثاتك تبقى في جهازك.',
     rename: 'إعادة تسمية', delete: 'حذف', confirm_delete: 'تحذف هذي المحادثة؟', you: 'أنت',
     no_provider_ready: 'ما فيه نموذج جاهز للحين — افتح الإعدادات ← النماذج وثبّت وسجّل دخول.',
+    diag_title: 'تفاصيل (صوّرها وأرسلها)', diag_searched: 'المجلدات اللي بحثت فيها',
+    installed_not_found: 'npm خلّص التثبيت، بس الأداة للحين ما انلقت. أعد تشغيل مجلس، ولو استمرت افتح التفاصيل تحت.',
   },
 };

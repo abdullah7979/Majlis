@@ -389,6 +389,10 @@ function providerCard(id, { onChange } = {}) {
     if (extra.hint) card.append(h('div', { class: 'hint' }, extra.hint));
     if (extra.result) card.append(h('div', { class: 'hint', style: `color:${extra.result.ok ? 'var(--ok)' : 'var(--bad)'}` }, extra.result.ok ? t('test_ok') : `${t(extra.result.kind === 'auth' ? 'signed_out' : extra.result.kind === 'limit' ? 'out_limit' : 'failed')} ${extra.result.message || ''}`));
     if (extra.log) card.append(h('pre', { class: 'log' }, extra.log));
+    if (!p.installed && p.searched && extra.showDiag) {
+      card.append(h('details', { class: 'hint diag' }, h('summary', {}, t('diag_title')),
+        h('pre', { class: 'log' }, `${p.npmPackage}\n${t('diag_searched')}:\n` + p.searched.join('\n'))));
+    }
   };
   async function reload() { S.providers = await api.providers.status(); Object.assign(p, S.providers[id]); draw(); refreshProviders(); onChange && onChange(); }
   async function install() {
@@ -399,12 +403,13 @@ function providerCard(id, { onChange } = {}) {
     off();
     if (!r.ok && r.reason === 'no_node') { draw({ hint: t('ob_node_missing') }); return; }
     await reload();
-    if (!r.ok) draw({ log: r.log });
+    if (!r.ok) draw({ log: r.log, showDiag: true });
+    else if (!p.installed) draw({ hint: t('installed_not_found'), log: r.log, showDiag: true });
     else draw({ hint: t(`login_hint_${id}`) });
   }
   async function login() { await api.providers.login(id); draw({ hint: t(`login_hint_${id}`) }); setTimeout(reload, 20000); }
   async function test() { draw({ testing: true }); const r = await api.providers.test(id); await reload(); draw({ result: r }); }
-  draw();
+  draw({ showDiag: true });
   return card;
 }
 

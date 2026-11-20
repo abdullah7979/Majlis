@@ -63,3 +63,25 @@ test('settings deep merge keeps arrays replaced, objects merged', () => {
   const m = deepMerge({ a: 1, o: { x: 1, y: 2 }, arr: [1, 2] }, { o: { y: 3 }, arr: [9] });
   assert.deepEqual(m, { a: 1, o: { x: 1, y: 3 }, arr: [9] });
 });
+
+test('finds CLIs in npm\'s global folder even when it is not on PATH (Windows)', { skip: process.platform !== 'win32' }, async () => {
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  const appdata = fs.mkdtempSync(path.join(os.tmpdir(), 'appdata '));
+  fs.mkdirSync(path.join(appdata, 'npm'));
+  fs.writeFileSync(path.join(appdata, 'npm', 'zzmajlistool.cmd'), '@echo zz 1.2.3\r\n');
+  const saved = process.env.APPDATA;
+  process.env.APPDATA = appdata;
+  try {
+    const { which, run } = require('../src/core/shell');
+    const found = await which('zzmajlistool');
+    assert.ok(found && found.toLowerCase().endsWith('zzmajlistool.cmd'), String(found));
+    const r = await run(found, ['--version']); // full path with a space in it
+    assert.match(r.stdout, /zz 1\.2\.3/);
+  } finally { process.env.APPDATA = saved; }
+});
+
+test('which() returns null for missing tools and full path for present ones', async () => {
+  const { which } = require('../src/core/shell');
+  assert.equal(await which('definitely-not-a-real-tool-xyz'), null);
+  assert.ok(await which('node'));
+});
