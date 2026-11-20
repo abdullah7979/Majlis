@@ -27,6 +27,12 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
+      - name: Create tag for manual runs
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        shell: bash
+        run: |
+          V="v$(node -p "require('./package.json').version")"
+          git tag "$V" && git push origin "$V" || echo "tag $V already exists"
       - name: Build and publish
         run: npm run release
         env:
