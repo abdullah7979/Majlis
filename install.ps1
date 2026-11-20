@@ -57,10 +57,19 @@ Refresh-Path
 Step 'Downloading Majlis'
 $base = 'https://github.com/abdullah7979/majlis/releases/latest/download'
 # latest.yml (published with every release) names the current installer; no API call, no rate limit.
-$yml = (Invoke-WebRequest "$base/latest.yml" -UseBasicParsing).Content
-if ($yml -is [byte[]]) { $yml = [Text.Encoding]::UTF8.GetString($yml) }
-$name = ([regex]::Match($yml, '(?m)^path:\s*(.+)$')).Groups[1].Value.Trim()
-$version = ([regex]::Match($yml, '(?m)^version:\s*(.+)$')).Groups[1].Value.Trim()
+$name = $null; $version = $null
+try {
+  $yml = (Invoke-WebRequest "$base/latest.yml" -UseBasicParsing).Content
+  if ($yml -is [byte[]]) { $yml = [Text.Encoding]::UTF8.GetString($yml) }
+  $name = ([regex]::Match($yml, '(?m)^path:\s*(.+)$')).Groups[1].Value.Trim()
+  $version = ([regex]::Match($yml, '(?m)^version:\s*(.+)$')).Groups[1].Value.Trim()
+} catch { }
+if (-not $name) {
+  # Fallback: ask the GitHub API which installer is the newest.
+  $rel = Invoke-RestMethod 'https://api.github.com/repos/abdullah7979/majlis/releases/latest' -Headers @{ 'User-Agent' = 'majlis-installer' }
+  $asset = $rel.assets | Where-Object { $_.name -like 'Majlis-Setup-*.exe' } | Select-Object -First 1
+  if ($asset) { $name = $asset.name; $version = $rel.tag_name; $base = $asset.browser_download_url.Substring(0, $asset.browser_download_url.LastIndexOf('/')) }
+}
 if (-not $name) { throw 'Could not find the latest Majlis installer.' }
 $setup = Join-Path $env:TEMP $name
 Invoke-WebRequest "$base/$name" -OutFile $setup -UseBasicParsing

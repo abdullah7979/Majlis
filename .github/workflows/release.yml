@@ -27,14 +27,22 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
-      - name: Create tag for manual runs
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+      - name: Build installer
+        run: npm run dist
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+      - name: Publish one release with all files
         shell: bash
-        run: |
-          V="v$(node -p "require('./package.json').version")"
-          git tag "$V" && git push origin "$V" || echo "tag $V already exists"
-      - name: Build and publish
-        run: npm run release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: |
+          V="v$(node -p "require('./package.json').version")"
+          # remove any earlier/duplicate release for this version, then publish exactly one
+          for id in $(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name==\"$V\") | .id"); do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+          done
+          gh release create "$V" dist/Majlis-Setup-*.exe dist/Majlis-Setup-*.exe.blockmap dist/latest.yml \
+            --target "$GITHUB_SHA" --title "Majlis $V" --latest \
+            --notes "Install or update: open PowerShell and run \`irm https://raw.githubusercontent.com/abdullah7979/majlis/main/install.ps1 | iex\` — installed copies update themselves."
+          sleep 10
+          curl -fsIL "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/latest.yml" > /dev/null && echo "latest.yml is downloadable"
