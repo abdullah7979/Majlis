@@ -12,16 +12,21 @@ jobs:
         shell: powershell
         run: |
           irm https://antigravity.google/cli/install.ps1 | iex
-      - name: Print agy help
+      - name: Probe agy headless input
         shell: cmd
         continue-on-error: true
         run: |
           set AGY=%LOCALAPPDATA%\agy\bin\agy.exe
-          echo ===== version & "%AGY%" --version 2>&1
-          echo ===== help & "%AGY%" --help 2>&1
-          echo ===== models help & "%AGY%" models --help 2>&1
-          echo ===== models & "%AGY%" models 2>&1
-          echo ===== headless & echo say hi | "%AGY%" -p "hello" --output-format stream-json 2>&1
+          echo {"event":"user","message":{"content":"hi"}}> in.jsonl
+          echo ===== A: -p + stream-json stdin
+          "%AGY%" -p --input-format stream-json --output-format stream-json --print-timeout 5s < in.jsonl 2>&1
           echo ===== exit %ERRORLEVEL%
-          echo ===== dirs & dir /s /b "%USERPROFILE%\.gemini" 2>&1
-          dir /s /b "%LOCALAPPDATA%\agy" 2>&1
+          echo ===== B: -p + text stdin
+          echo hello there| "%AGY%" -p --output-format stream-json --print-timeout 5s 2>&1
+          echo ===== exit %ERRORLEVEL%
+          echo ===== C: mode values
+          "%AGY%" -p "x" --mode bogus --print-timeout 3s 2>&1
+          echo ===== exit %ERRORLEVEL%
+          echo ===== D: help print
+          "%AGY%" help print 2>&1
+          "%AGY%" help models 2>&1
