@@ -85,7 +85,7 @@ function setupUpdater() {
     autoUpdater.on('error', () => {});
     autoUpdater.checkForUpdates().catch(() => {});
     setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 6 * 3600e3);
-    ipcMain.handle('app:install-update', () => { quitting = true; autoUpdater.quitAndInstall(); });
+    ipcMain.handle('app:install-update', () => { quitting = true; autoUpdater.quitAndInstall(true, true); }); // silent install, relaunch
   } catch (_) {}
 }
 
