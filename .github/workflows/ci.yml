@@ -32,6 +32,8 @@ jobs:
 
   voice:
     name: Speech recognition (Windows, real Whisper models)
+    # Downloads ~1 GB of model files, so it runs on demand or when a commit message contains [voice].
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[voice]')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,7 +65,7 @@ jobs:
 
   build:
     name: Windows installer
-    needs: [test, voice]
+    needs: test
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

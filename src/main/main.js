@@ -94,7 +94,7 @@ function registerIpc() {
   const h = (ch, fn) => ipcMain.handle(ch, async (_e, ...a) => fn(...a));
 
   h('app:info', () => ({ version: app.getVersion(), platform: process.platform, locale: app.getLocale(), dataDir: store.dir, categories: CATEGORIES, packaged: app.isPackaged,
-    voiceSelftest: VOICE_SELFTEST ? { file: VOICE_SELFTEST, model: process.env.MAJLIS_ASR_MODEL || '' } : null }));
+    voiceSelftest: VOICE_SELFTEST ? { file: VOICE_SELFTEST, model: process.env.MAJLIS_ASR_MODEL || '', language: process.env.MAJLIS_ASR_LANG || 'auto' } : null }));
   h('app:selftest-result', (r) => {
     console.log('VOICE_SELFTEST ' + JSON.stringify(r));
     if (process.env.MAJLIS_SELFTEST_OUT) { try { fs.writeFileSync(process.env.MAJLIS_SELFTEST_OUT, JSON.stringify(r, null, 2), 'utf8'); } catch (_) {} }

@@ -702,7 +702,7 @@ async function showOnboarding() {
 }
 
 // ------------------------------------------------------------------ voice self-test (CI / diagnostics)
-async function runVoiceSelftest({ file, model }) {
+async function runVoiceSelftest({ file, model, language }) {
   try {
     while (!window.ASR) await new Promise((r) => setTimeout(r, 200));
     const url = 'file:///' + file.replace(/\\/g, '/').replace(/^\/+/, '');
@@ -711,7 +711,7 @@ async function runVoiceSelftest({ file, model }) {
     const t0 = Date.now();
     await window.ASR.load(model || voiceSettings().model);
     const loadMs = Date.now() - t0;
-    const r = await window.ASR.transcribe(pcm, { language: 'auto', model: model || voiceSettings().model });
+    const r = await window.ASR.transcribe(pcm, { language: language || 'auto', model: model || voiceSettings().model });
     await api.selftestResult({ ok: !!r.text, text: r.text, ms: r.ms, loadMs, device: r.device, seconds: +(pcm.length / 16000).toFixed(1) });
   } catch (e) {
     await api.selftestResult({ ok: false, error: String((e && e.stack) || e) });
