@@ -127,6 +127,7 @@ function registerIpc() {
 
   h('providers:status', () => orch.providerStatus());
   h('providers:test', (id) => orch.test(id));
+  h('providers:refresh-models', () => orch.refreshCatalog(true).then(() => true));
   h('providers:clear-cooldown', (id) => { store.clearCooldown(id); return true; });
   h('providers:login', (id) => {
     const p = PROVIDERS[id]; if (!p) return false;

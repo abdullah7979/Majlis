@@ -255,3 +255,8 @@ details.activity ol { margin: 0; padding: 0 14px 10px 34px; max-height: 220px; o
 .vb-stop:hover { border-color: var(--bad); }
 .msg.user .voice-tag { font-size: 11px; color: var(--mute); margin-inline-end: 6px; }
 @keyframes wave { 50% { height: 18px; } }
+
+.model-chips { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.mchip { font-size: 11.5px; padding: 2px 9px; border-radius: 99px; background: var(--bg-2); border: 1px solid var(--line); color: var(--text-2); direction: ltr; }
+.mic-test { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mic-test .out { flex: 1; min-width: 200px; padding: 8px 12px; border-radius: 9px; background: var(--bg); border: 1px solid var(--line); min-height: 36px; }

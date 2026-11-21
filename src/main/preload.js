@@ -20,7 +20,7 @@ contextBridge.exposeInMainWorld('majlis', {
   conv: { list: invoke('conv:list'), get: invoke('conv:get'), create: invoke('conv:create'), remove: invoke('conv:delete'), update: invoke('conv:update') },
   chat: { send: invoke('chat:send'), cancel: invoke('chat:cancel'), feedback: invoke('chat:feedback'), onEvent: on('chat:event') },
   providers: {
-    status: invoke('providers:status'), test: invoke('providers:test'), login: invoke('providers:login'),
+    status: invoke('providers:status'), test: invoke('providers:test'), refreshModels: invoke('providers:refresh-models'), login: invoke('providers:login'),
     install: invoke('providers:install'), clearCooldown: invoke('providers:clear-cooldown'), onInstallLog: on('providers:install-log'),
   },
   system: { checkNode: invoke('system:check-node') },

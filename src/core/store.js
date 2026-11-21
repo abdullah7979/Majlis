@@ -31,8 +31,17 @@ class Store {
     fs.mkdirSync(this.attachDir, { recursive: true });
     this.settingsFile = path.join(dir, 'settings.json');
     this.stateFile = path.join(dir, 'state.json');
-    this.settings = deepMerge(DEFAULT_SETTINGS, readJson(this.settingsFile, {}));
-    this.state = deepMerge({ cooldowns: {}, usage: {}, learning: {}, auth: {} }, readJson(this.stateFile, {}));
+    const raw = readJson(this.settingsFile, {});
+    this.settings = deepMerge(DEFAULT_SETTINGS, raw);
+    // v0.3 migration: routes from older versions pointed at retired model names (gemini-2.5-flash...).
+    if (Object.keys(raw).length && (!raw.schema || raw.schema < 3)) {
+      this.settings.routes = DEFAULT_SETTINGS.routes;
+      this.settings.voice = { ...this.settings.voice, model: DEFAULT_SETTINGS.voice.model };
+      delete this.settings.classifier;
+      this.settings.schema = 3;
+      try { writeJson(this.settingsFile, this.settings); } catch (_) {}
+    }
+    this.state = deepMerge({ cooldowns: {}, usage: {}, learning: {}, auth: {}, models: {} }, readJson(this.stateFile, {}));
   }
 
   // ---- settings

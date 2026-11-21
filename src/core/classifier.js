@@ -44,7 +44,10 @@ function heuristicClassify(text, { attachments = [] } = {}) {
   let best = 'quick', bestScore = 0;
   for (const c of CATEGORIES) if (scores[c] > bestScore) { best = c; bestScore = scores[c]; }
   if (best === 'quick' && text.length > 400) best = 'writing';
-  return { category: best, reason: bestScore ? 'keywords' : 'no strong signal', source: 'heuristic' };
+  // Confident = a clear signal (>=3) that beats the runner-up; otherwise a fast model breaks the tie.
+  const sorted = Object.values(scores).sort((a, b) => b - a);
+  const confident = bestScore >= 3 && sorted[0] - (sorted[1] || 0) >= 2;
+  return { category: best, reason: bestScore ? 'keywords' : 'no strong signal', source: 'heuristic', confident };
 }
 
 function buildClassifierPrompt(text) {

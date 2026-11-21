@@ -33,10 +33,12 @@ const fmtTime = (ms) => new Intl.DateTimeFormat(S.lang === 'ar' ? 'ar-SA' : unde
 const baseName = (p) => String(p).split(/[\\/]/).pop();
 
 function providerLabel(id) { return (S.providers[id] && S.providers[id].label) || id; }
+const TOKEN_LABEL = { '@best': 'tok_best', '@flash': 'tok_flash', '@fast': 'tok_fast' };
 function modelLabel(provider, model) {
   const p = S.providers[provider];
   const m = p && p.models.find((x) => x.id === model);
   if (m) return m.label;
+  if (TOKEN_LABEL[model]) return `${providerLabel(provider)} · ${t(TOKEN_LABEL[model])}`;
   return model ? `${providerLabel(provider)} · ${model}` : providerLabel(provider);
 }
 
@@ -497,6 +499,8 @@ function providerCard(id, { onChange } = {}) {
       } }), h('span'));
       acts.append(sw);
     }
+    const ms = p.models || [];
+    if (p.installed && ms.length) card.append(h('div', { class: 'model-chips' }, ms.map((m) => h('span', { class: 'mchip', title: m.id }, m.label))));
     card.append(
       h('div', { class: `avatar ${id}` }, INITIAL[id]),
       h('div', {}, h('div', { class: 'name' }, `${p.label}`, h('span', { class: 'vendor' }, p.vendor)),
@@ -530,7 +534,11 @@ function providerCard(id, { onChange } = {}) {
 }
 
 function paneProviders(pane) {
-  pane.append(h('h2', {}, t('tab_providers')), h('p', { class: 'help' }, t('ob_note')));
+  pane.append(h('h2', {}, t('tab_providers')), h('p', { class: 'help' }, t('ob_note')),
+    h('button', { class: 'btn', style: 'margin:-6px 0 14px', onclick: async (e) => {
+      e.target.disabled = true; e.target.textContent = t('refreshing');
+      await api.providers.refreshModels(); await refreshProviders(); paneProviders((pane.innerHTML = '', pane));
+    } }, `⟳ ${t('refresh_models')}`));
   for (const id of PROVIDER_IDS) if (S.providers[id]) pane.append(providerCard(id));
   const cm = S.settings.customModels || {};
   const card = h('div', { class: 'card' }, h('div', { class: 'field', style: 'display:block' },
@@ -548,6 +556,7 @@ function paneProviders(pane) {
 function modelOptions(provider, selected) {
   const p = S.providers[provider];
   const opts = [h('option', { value: '' }, t('default_model'))];
+  for (const tok of Object.keys(TOKEN_LABEL)) if (provider === 'gemini' || tok === '@best') opts.push(h('option', { value: tok }, `✦ ${t(TOKEN_LABEL[tok])}`));
   for (const m of (p ? p.models : [])) opts.push(h('option', { value: m.id }, m.label));
   if (selected && !(p && p.models.some((m) => m.id === selected))) opts.push(h('option', { value: selected }, selected));
   const sel = h('select', {}, opts); sel.value = selected || ''; return sel;
@@ -588,13 +597,6 @@ function paneGeneral(pane) {
   const lang = h('select', { onchange: (e) => saveSettings({ language: e.target.value || null }).then(() => openSettings('general')) },
     h('option', { value: '' }, 'System'), h('option', { value: 'en' }, 'English'), h('option', { value: 'ar' }, 'العربية'));
   lang.value = s.language || '';
-  const clsSel = h('select', { onchange: (e) => { const [provider, model] = e.target.value.split('|'); saveSettings({ classifier: { provider, model } }); } });
-  for (const id of PROVIDER_IDS) {
-    const p = S.providers[id]; if (!p) continue;
-    clsSel.append(h('option', { value: `${id}|` }, `${p.label} — ${t('default_model')}`));
-    for (const m of p.models) clsSel.append(h('option', { value: `${id}|${m.id}` }, m.label));
-  }
-  clsSel.value = `${s.classifier.provider}|${s.classifier.model}`;
   const autonomy = h('div', { class: 'radio-list' }, ['safe', 'edit', 'full'].map((k) => h('label', {},
     h('input', { type: 'radio', name: 'autonomy', value: k, checked: s.autonomy === k, onchange: () => saveSettings({ autonomy: k }) }), t(`autonomy_${k}`))));
   const num = (key, min, max) => h('input', { type: 'number', min, max, value: s[key], onchange: (e) => saveSettings({ [key]: Math.max(min, Math.min(max, Number(e.target.value) || min)) }) });
@@ -602,7 +604,6 @@ function paneGeneral(pane) {
   pane.append(h('h2', {}, t('tab_general')), h('div', { class: 'card' },
     field(t('language'), lang),
     field(t('smart_routing'), toggle(s.smartRouting, (v) => saveSettings({ smartRouting: v })), t('smart_routing_help')),
-    field(t('classifier'), clsSel),
     h('div', { class: 'field', style: 'display:block' }, h('label', {}, t('autonomy')), h('div', { style: 'margin-top:10px' }, autonomy)),
     field(t('default_workspace'), wsBtn),
     field(t('history_turns'), num('historyTurns', 1, 50)),
@@ -625,8 +626,29 @@ function paneGeneral(pane) {
       h('button', { class: 'btn', onclick: async () => {
         const r = await Voice.speak(t('voice_test_text'), { voiceName: voiceSel.value });
         if (r.reason === 'no_arabic_voice') toast(t('no_arabic_voice'));
-      } }, t('test_voice'))))));
+      } }, t('test_voice')))),
+    micTestField()));
 }
+/** Record one sentence and show what Gemini understood — a one-click end-to-end voice check. */
+function micTestField() {
+  const out = h('div', { class: 'out', dir: 'auto' }, t('mic_test_hint'));
+  const btn = h('button', { class: 'btn primary', onclick: async () => {
+    btn.disabled = true; out.textContent = t('mic_test_listening');
+    try {
+      const rec = new Voice.Recorder({ noSpeechMs: 8000 });
+      const res = await rec.record();
+      if (!res.wav) { out.textContent = '—'; return; }
+      out.textContent = t('mic_test_working');
+      const started = Date.now();
+      const r = await api.voice.transcribe({ wav: res.wav, language: S.lang });
+      const secs = ((Date.now() - started) / 1000).toFixed(1);
+      out.textContent = r.ok ? `${r.text || '—'}   (${secs}s)` : `✖ ${r.kind}${r.message ? ': ' + r.message : ''}`;
+    } catch (e) { out.textContent = t('mic_denied'); }
+    finally { btn.disabled = false; }
+  } }, `🎙 ${t('mic_test')}`);
+  return h('div', { class: 'field', style: 'display:block' }, h('label', {}, t('mic_test')), h('div', { class: 'mic-test', style: 'margin-top:8px' }, btn, out));
+}
+
 function paneAbout(pane) {
   pane.append(h('h2', {}, 'Majlis'), h('p', { class: 'help' }, t('welcome_sub')),
     h('div', { class: 'card' },
