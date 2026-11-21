@@ -18,15 +18,9 @@ jobs:
         run: |
           set AGY=%LOCALAPPDATA%\agy\bin\agy.exe
           echo {"event":"user","message":{"content":"hi"}}> in.jsonl
-          echo ===== A: -p + stream-json stdin
-          "%AGY%" -p --input-format stream-json --output-format stream-json --print-timeout 5s < in.jsonl 2>&1
-          echo ===== exit %ERRORLEVEL%
-          echo ===== B: -p + text stdin
-          echo hello there| "%AGY%" -p --output-format stream-json --print-timeout 5s 2>&1
-          echo ===== exit %ERRORLEVEL%
-          echo ===== C: mode values
-          "%AGY%" -p "x" --mode bogus --print-timeout 3s 2>&1
-          echo ===== exit %ERRORLEVEL%
-          echo ===== D: help print
-          "%AGY%" help print 2>&1
-          "%AGY%" help models 2>&1
+          echo ===== E: stream-json stdin, -p= empty
+          "%AGY%" --input-format stream-json --output-format stream-json -p= < in.jsonl 2>&1 | findstr /v accounts.google
+          echo ===== F: stream-json stdin, no -p
+          "%AGY%" --input-format stream-json --output-format stream-json < in.jsonl 2>&1 | findstr /v accounts.google
+          echo ===== G: text stdin, -p=
+          echo hello there| "%AGY%" --output-format stream-json -p= 2>&1 | findstr /v accounts.google
