@@ -1,0 +1,28 @@
+name: Probe CLIs
+
+# Diagnostics: install the vendor CLIs on a clean Windows machine and print their real help text.
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    steps:
+      - name: Install Antigravity CLI
+        shell: powershell
+        run: |
+          irm https://antigravity.google/cli/install.ps1 | iex
+      - name: Print agy help
+        shell: powershell
+        continue-on-error: true
+        run: |
+          $env:Path = [Environment]::GetEnvironmentVariable('Path','User') + ';' + [Environment]::GetEnvironmentVariable('Path','Machine')
+          $agy = (Get-Command agy -ErrorAction SilentlyContinue).Source
+          if (-not $agy) { $agy = Get-ChildItem $env:LOCALAPPDATA,$env:USERPROFILE -Recurse -Filter 'agy*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName }
+          Write-Host "AGY PATH: $agy"
+          Write-Host "===== agy --version"; & $agy --version 2>&1
+          Write-Host "===== agy --help"; & $agy --help 2>&1
+          Write-Host "===== agy models --help"; & $agy models --help 2>&1
+          Write-Host "===== agy models"; & $agy models 2>&1
+          Write-Host "===== agy -p (no auth, json)"; "say hi" | & $agy -p "hello" --output-format stream-json 2>&1 | Select-Object -First 20
+          Write-Host "===== files"; Get-ChildItem "$env:USERPROFILE\.gemini" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName | Format-Table -AutoSize | Out-String -Width 300
