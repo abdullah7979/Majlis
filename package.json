@@ -1,8 +1,8 @@
 {
   "name": "majlis",
   "productName": "Majlis",
-  "version": "0.3.0",
-  "description": "One desktop app for all your AI subscriptions \u2014 smart routing and automatic fallback across Claude Code, Codex and Gemini CLI.",
+  "version": "0.4.0",
+  "description": "One desktop app for all your AI subscriptions — smart routing and automatic fallback across Claude Code, Codex and Gemini CLI.",
   "main": "src/main/main.js",
   "author": "abdullah7979",
   "license": "MIT",

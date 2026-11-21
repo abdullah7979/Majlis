@@ -47,8 +47,10 @@ class Orchestrator {
     this.catalogLoading = Promise.all(Object.values(this.providers).map(async (p) => {
       if (!p.listModelsArgs) return;
       const c = state.models[p.id];
-      const authUnknown = p.authProbe && !(state.auth && state.auth[p.id]);
-      if (!force && !authUnknown && c && Date.now() - c.at < CATALOG_TTL && c.list.length) return;
+      const a = state.auth && state.auth[p.id];
+      // Re-check sign-in when unknown, or shortly after it was found signed out (the user may have just signed in).
+      const authStale = p.authProbe && (!a || (a.ok === false && Date.now() - a.at > 15000));
+      if (!force && !authStale && c && Date.now() - c.at < CATALOG_TTL && c.list.length) return;
       const bin = await which(p.bin);
       if (!bin) return;
       const r = await run(bin, p.listModelsArgs, { timeoutMs: 30000, env: augmentedEnv(p.runEnv || {}) });

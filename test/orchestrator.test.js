@@ -304,3 +304,15 @@ test('settings from older versions (retired models, Gemini CLI) are migrated', a
   assert.equal(store.getSettings().onboarded, true);
 });
 
+
+test('after signing in to Antigravity, the next status check notices it', async () => {
+  const { orch, store } = await setup();
+  process.env.FAKE_MODE_agy = 'auth';
+  await orch.refreshCatalog(true);
+  assert.equal(store.state.auth.gemini.ok, false);
+  delete process.env.FAKE_MODE_agy;                 // user signs in
+  store.state.auth.gemini.at -= 20000;              // a little time passes
+  await orch.providerStatus(); await orch.catalogLoading;
+  assert.equal(store.state.auth.gemini.ok, true);
+  assert.equal((await orch.providerStatus()).gemini.signedIn, true);
+});

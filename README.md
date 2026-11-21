@@ -1,7 +1,7 @@
 <p align="center"><img src="build/icon.png" width="96" alt="Majlis"></p>
 <h1 align="center">Majlis</h1>
 <p align="center"><b>One desktop app for every AI you already pay for.</b><br>
-Claude · ChatGPT (Codex) · Gemini — in one window, with smart routing and automatic fallback.</p>
+Claude · ChatGPT (Codex) · Gemini (Google Antigravity) — in one window, with smart routing and automatic fallback.</p>
 
 <p align="center"><img src="docs/chat.png" width="860" alt="Majlis chat"></p>
 
@@ -11,9 +11,10 @@ You have several AI subscriptions, and each one is best at something different. 
 
 - **Smart routing**: a fast model reads each request and sends it to the strongest model for that kind of work. Heavy coding goes to Claude Opus, research and long files go to Gemini Pro, images go to ChatGPT, and so on. You can change every route.
 - **Automatic fallback**: when a model hits its usage limit, Majlis parks it until its quota resets, then continues **the same conversation** on the next model, with the full context.
-- **Uses your subscriptions, not API keys**: everything runs through each vendor's official CLI (Claude Code, Codex CLI, Gemini CLI) signed in with your own account. There are no extra costs and no scraping.
+- **Uses your subscriptions, not API keys**: everything runs through each vendor's official CLI (Claude Code, Codex CLI, Google Antigravity CLI) signed in with your own account. There are no extra costs and no scraping.
+- **Every model your plans include, listed live**: Claude Fable/Opus/Sonnet/Haiku, the GPT models in your ChatGPT plan, and Google's Gemini models — read from each tool, so new models appear automatically.
 - **Works on your projects**: pick a project folder and the models can read and edit its files directly. You choose how much they're allowed to do.
-- **Talk to it**: press 🎙 (or `Ctrl+M`) and speak. Gemini transcribes accurately, including Arabic dialects. **Voice chat** 🎧 makes it hands-free: you talk, the answer is read aloud, and it keeps listening, while the models still do the full task (code, files, research).
+- **Talk to it**: press 🎙 (or `Ctrl+M`) and speak. Speech is recognised **on your PC** by Whisper large-v3 turbo (on the graphics card when available): accurate Arabic and English, free, works offline, no account needed. The model (~1 GB) downloads once in the background. **Voice chat** 🎧 makes it hands-free: you talk, the answer is read aloud, and it keeps listening, while the models still do the full task (code, files, research).
 - **Learns your taste**: 👍 / 👎 on any answer re-orders the routes over time.
 - **Feels native**: a real Windows app with an installer, tray icon, global shortcut (`Ctrl+Shift+Space`), notifications, drag-and-drop attachments, saved conversations, full Arabic (RTL) and English UI, and auto-updates.
 
@@ -29,7 +30,7 @@ Open **PowerShell** (Start menu → type `PowerShell`) and paste:
 irm https://raw.githubusercontent.com/abdullah7979/majlis/main/install.ps1 | iex
 ```
 
-That single line installs whatever is missing — Node.js, the official Claude Code / Codex / Gemini CLIs — then Majlis itself (Start menu + desktop shortcut) and opens it. On first launch, click **Sign in** for each subscription you have:
+That single line installs whatever is missing — Node.js, the official Claude Code / Codex / Antigravity CLIs — then Majlis itself (Start menu + desktop shortcut) and opens it. On first launch, click **Sign in** for each subscription you have:
 
 - **Claude** → choose *Claude account (Pro/Max)*
 - **ChatGPT** → choose *Sign in with ChatGPT*
