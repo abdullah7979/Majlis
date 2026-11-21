@@ -8,7 +8,7 @@ const FAKE = path.join(__dirname, 'fixtures', 'fake-cli.js');
 /** Create a temp bin dir with fake claude/codex/gemini and put it first on PATH. */
 function installFakeClis() {
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'majlis-bin-'));
-  for (const name of ['claude', 'codex', 'gemini']) {
+  for (const name of ['claude', 'codex', 'agy']) {
     if (process.platform === 'win32') {
       fs.writeFileSync(path.join(bin, `${name}.cmd`), `@echo off\r\nnode "${FAKE}" ${name} %*\r\n`);
     } else {
@@ -21,7 +21,6 @@ function installFakeClis() {
   process.env[key] = bin + path.delimiter + process.env[key];
   const log = path.join(bin, 'calls.jsonl');
   process.env.FAKE_LOG = log;
-  process.env.GEMINI_API_KEY = 'test-key'; // counts as signed in for the fake Gemini
   return {
     bin,
     calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []),

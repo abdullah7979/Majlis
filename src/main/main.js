@@ -9,6 +9,9 @@ const { run, openTerminal, augmentedEnv, which } = require('../core/shell');
 const { CATEGORIES } = require('../core/defaults');
 
 const SMOKE = process.argv.includes('--smoke-test');
+const VOICE_SELFTEST = (process.argv.find((a) => a.startsWith('--voice-selftest=')) || '').slice('--voice-selftest='.length);
+// Lets the speech model use several CPU threads when there is no usable graphics card.
+app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer');
 const ICON = path.join(__dirname, '..', '..', 'build', 'icon.png');
 
 if (!SMOKE && !app.requestSingleInstanceLock()) { app.quit(); process.exit(0); }
@@ -90,7 +93,13 @@ function setupUpdater() {
 function registerIpc() {
   const h = (ch, fn) => ipcMain.handle(ch, async (_e, ...a) => fn(...a));
 
-  h('app:info', () => ({ version: app.getVersion(), platform: process.platform, locale: app.getLocale(), dataDir: store.dir, categories: CATEGORIES, packaged: app.isPackaged }));
+  h('app:info', () => ({ version: app.getVersion(), platform: process.platform, locale: app.getLocale(), dataDir: store.dir, categories: CATEGORIES, packaged: app.isPackaged,
+    voiceSelftest: VOICE_SELFTEST ? { file: VOICE_SELFTEST, model: process.env.MAJLIS_ASR_MODEL || '' } : null }));
+  h('app:selftest-result', (r) => {
+    console.log('VOICE_SELFTEST ' + JSON.stringify(r));
+    if (process.env.MAJLIS_SELFTEST_OUT) { try { fs.writeFileSync(process.env.MAJLIS_SELFTEST_OUT, JSON.stringify(r, null, 2), 'utf8'); } catch (_) {} }
+    quitting = true; setTimeout(() => app.exit(r && r.ok ? 0 : 1), 200); return true;
+  });
   h('settings:get', () => store.getSettings());
   h('settings:set', (patch) => { const s = store.updateSettings(patch); applySystemSettings(); return s; });
   h('settings:reset-routes', () => store.resetRoutes());
@@ -136,26 +145,6 @@ function registerIpc() {
     return true;
   });
 
-  // ---- voice: renderer records + encodes WAV, Gemini transcribes it
-  h('voice:transcribe', async ({ wav, language }) => {
-    const dir = path.join(store.dir, 'voice');
-    fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, `rec-${Date.now()}.wav`);
-    fs.writeFileSync(file, Buffer.from(wav));
-    try { return await orch.transcribe(file, { language }); }
-    finally { fs.rm(file, { force: true }, () => {}); }
-  });
-  h('providers:install', async (id) => {
-    const p = PROVIDERS[id]; if (!p) return { ok: false };
-    const npm = await which('npm', augmentedEnv());
-    if (!npm) return { ok: false, reason: 'no_node' };
-    const r = await run('npm', ['install', '-g', p.npmPackage], {
-      timeoutMs: 10 * 60e3,
-      onStdout: (d) => win.webContents.send('providers:install-log', { id, text: d }),
-      onStderr: (d) => win.webContents.send('providers:install-log', { id, text: d }),
-    });
-    return { ok: r.code === 0, log: (r.stderr || r.stdout).slice(-1500) };
-  });
   h('system:check-node', async () => {
     const env = augmentedEnv();
     const node = await which('node', env);
@@ -205,6 +194,7 @@ app.whenReady().then(() => {
   registerIpc();
   createWindow();
   if (!SMOKE) { setupTray(); applySystemSettings(); setupUpdater(); }
+  if (VOICE_SELFTEST) setTimeout(() => { console.error('VOICE_SELFTEST_TIMEOUT'); app.exit(1); }, 15 * 60e3);
   if (SMOKE) {
     setTimeout(() => { console.error('SMOKE_TIMEOUT'); app.exit(1); }, 45000);
     win.webContents.on('console-message', (...a) => { const msg = a[0] && a[0].message ? a[0].message : a[2]; if (/error/i.test(String(msg))) console.error('RENDERER:', msg); });

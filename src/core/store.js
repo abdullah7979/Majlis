@@ -34,14 +34,17 @@ class Store {
     const raw = readJson(this.settingsFile, {});
     this.settings = deepMerge(DEFAULT_SETTINGS, raw);
     // v0.3 migration: routes from older versions pointed at retired model names (gemini-2.5-flash...).
-    if (Object.keys(raw).length && (!raw.schema || raw.schema < 3)) {
+    if (Object.keys(raw).length && (!raw.schema || raw.schema < DEFAULT_SETTINGS.schema)) {
+      // v0.3: routes pointed at retired model names. v0.4: Gemini moved from Gemini CLI to Antigravity CLI.
       this.settings.routes = DEFAULT_SETTINGS.routes;
-      this.settings.voice = { ...this.settings.voice, model: DEFAULT_SETTINGS.voice.model };
+      this.settings.voice = { ...DEFAULT_SETTINGS.voice, ...(raw.voice || {}), model: DEFAULT_SETTINGS.voice.model };
       delete this.settings.classifier;
-      this.settings.schema = 3;
+      this.settings.schema = DEFAULT_SETTINGS.schema;
+      this._migratedGemini = true;
       try { writeJson(this.settingsFile, this.settings); } catch (_) {}
     }
     this.state = deepMerge({ cooldowns: {}, usage: {}, learning: {}, auth: {}, models: {} }, readJson(this.stateFile, {}));
+    if (this._migratedGemini) { delete this.state.models.gemini; delete this.state.auth.gemini; delete this.state.cooldowns.gemini; }
   }
 
   // ---- settings

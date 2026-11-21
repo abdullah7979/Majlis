@@ -2,7 +2,7 @@
   "name": "majlis",
   "productName": "Majlis",
   "version": "0.3.0",
-  "description": "One desktop app for all your AI subscriptions — smart routing and automatic fallback across Claude Code, Codex and Gemini CLI.",
+  "description": "One desktop app for all your AI subscriptions \u2014 smart routing and automatic fallback across Claude Code, Codex and Gemini CLI.",
   "main": "src/main/main.js",
   "author": "abdullah7979",
   "license": "MIT",
@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@highlightjs/cdn-assets": "^11.12.0",
+    "@huggingface/transformers": "^4.3.2",
     "dompurify": "^3.4.18",
     "electron-updater": "^6.8.11",
     "marked": "^18.2.1"
@@ -34,7 +35,13 @@
     "files": [
       "src/**/*",
       "build/icon.png",
-      "package.json"
+      "package.json",
+      "!node_modules/onnxruntime-node/**",
+      "!node_modules/sharp/**",
+      "!node_modules/@img/**",
+      "!node_modules/@huggingface/transformers/dist/*.node.*",
+      "!node_modules/onnxruntime-web/dist/*.mjs.map",
+      "!node_modules/onnxruntime-web/lib/**"
     ],
     "win": {
       "target": [

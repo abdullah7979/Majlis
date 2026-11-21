@@ -146,67 +146,77 @@ const codex = {
   },
 };
 
-// ---------------------------------------------------------------- Gemini CLI
-// gemini -p " " --skip-trust -o stream-json [-m model] --approval-mode X [--resume <uuid>]   (prompt on stdin)
-const APPROVAL = { safe: 'plan', edit: 'auto_edit', full: 'yolo' };
+// ---------------------------------------------------------------- Gemini via Antigravity CLI
+// Google retired Gemini CLI for personal accounts (Google AI Pro/Ultra/free) on 18 June 2026 and replaced
+// it with Antigravity CLI (`agy`). Verified on Windows with agy 1.5.14:
+//   agy --input-format stream-json --output-format stream-json [--model slug] [--mode m] [--conversation id]
+//   stdin: {"event":"user","message":{"content":"..."}}   (keeps Arabic/newlines out of the command line)
+//   stdout: {"event":"init"...} {"event":"step_update",...,"text_delta"} {"event":"result","result":{...}}
+// Signed out, it prints "Authentication required" and waits 60 s — we stop it immediately instead.
+const AGY_MODE = { safe: 'plan', edit: 'accept-edits', full: 'auto' };
 const gemini = {
   id: 'gemini',
   label: 'Gemini',
-  vendor: 'Google',
-  npmPackage: '@google/gemini-cli',
-  bin: 'gemini',
-  loginCommand: 'gemini',
-  credentialFiles: [path.join(home, '.gemini', 'oauth_creds.json')],
-  authEnv: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
-  // A headless run without stored Google credentials can't succeed, so a missing file means "not signed in".
-  strictCredentials: true,
-  // Headless runs refuse untrusted folders unless told otherwise; never open a browser from a background run.
-  runEnv: { GEMINI_CLI_TRUST_WORKSPACE: 'true', NO_BROWSER: 'true' },
-  staticModels: [{ id: 'auto', label: 'Gemini Auto' }],
-  listModelsArgs: ['models', '-o', 'json'],
+  vendor: 'Google Antigravity',
+  bin: 'agy',
+  install: process.platform === 'win32'
+    ? { command: 'powershell', args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', 'irm https://antigravity.google/cli/install.ps1 | iex'] }
+    : { command: 'bash', args: ['-c', 'curl -fsSL https://antigravity.google/cli/install.sh | bash'] },
+  loginCommand: 'agy',
+  credentialFiles: [], // stored in the system keyring — sign-in is checked with `agy models` instead
+  authProbe: true,
+  authRequiredRe: /Authentication required|Please sign in|Launch the CLI without arguments to sign in/i,
+  staticModels: [],
+  listModelsArgs: ['models'],
   parseModels(stdout) {
-    const start = stdout.indexOf('[');
-    const j = start >= 0 ? tryJson(stdout.slice(start)) : null;
-    return (Array.isArray(j) ? j : []).filter((m) => m && (m.id || m.modelId))
-      .map((m) => ({ id: m.id || m.modelId, label: prettyGemini(m.id || m.modelId, m.displayName) }));
+    if (/Please sign in/i.test(stdout)) return [];
+    const seen = new Set(), out = [];
+    for (const line of stdout.split(/\r?\n/)) {
+      const m = line.match(/\b([a-z][a-z0-9]*(?:[-.][a-z0-9]+)+)\b/i);
+      if (!m || /^(https?|www)/i.test(m[1]) || seen.has(m[1])) continue;
+      if (!/gemini|claude|gpt|gemma|llama|qwen|deepseek|grok|mistral|neon|flash|pro/i.test(m[1])) continue;
+      seen.add(m[1]);
+      out.push({ id: m[1], label: prettyGemini(m[1]) });
+    }
+    return out;
   },
   buildArgs({ model, autonomy, resumeId }) {
-    const a = ['-p', ' ', '--skip-trust', '-o', 'stream-json'];
-    if (model) a.push('-m', model);
-    a.push('--approval-mode', APPROVAL[autonomy] || 'auto_edit');
-    if (resumeId) a.push('--resume', resumeId);
+    const a = ['--input-format', 'stream-json', '--output-format', 'stream-json', '--disable-slash-commands'];
+    if (model) a.push('--model', model);
+    a.push('--mode', AGY_MODE[autonomy] || 'accept-edits');
+    if (autonomy === 'full') a.push('--dangerously-skip-permissions');
+    if (resumeId) a.push('--conversation', resumeId);
     return a;
   },
+  formatInput(prompt) { return JSON.stringify({ event: 'user', message: { content: prompt } }) + '\n'; },
   createParser(emit) {
+    let sawText = false;
     const lb = lineBuffer((line) => {
       const j = tryJson(line);
-      if (!j) return;
-      if (j.type === 'init') { if (j.session_id) emit({ type: 'session', id: j.session_id }); if (j.model) emit({ type: 'meta', model: j.model }); }
-      else if (j.type === 'message' && j.role === 'assistant' && j.content) emit({ type: 'text', text: j.content });
-      else if (j.type === 'tool_use') emit({ type: 'activity', text: describeTool(j.tool_name, j.parameters) });
-      else if (j.type === 'error') emit({ type: 'error', text: j.message || (j.error && j.error.message) || 'error' });
-      else if (j.type === 'result' && j.status && j.status !== 'success') emit({ type: 'error', text: (j.error && j.error.message) || `status ${j.status}` });
+      if (!j || !j.event) return;
+      if (j.event === 'init' && j.model) emit({ type: 'meta', model: j.model });
+      else if (j.event === 'step_update') {
+        if (j.conversation_id) emit({ type: 'session', id: j.conversation_id });
+        if (j.step_type === 'agent_response' && j.text_delta) { sawText = true; emit({ type: 'text', text: j.text_delta }); }
+        else if (j.step_type === 'tool' && j.state === 'ACTIVE' && j.tool_name) {
+          const info = j.tool_info && (j.tool_info.command || j.tool_info.path || j.tool_info.file_path || j.tool_info.query);
+          emit({ type: 'activity', text: info ? `${j.tool_name}: ${String(info).slice(0, 140)}` : j.tool_name });
+        }
+      } else if (j.event === 'result' && j.result) {
+        const r = j.result;
+        if (r.conversation_id) emit({ type: 'session', id: r.conversation_id });
+        if (r.status === 'SUCCESS') emit({ type: 'final', text: r.response || '', isError: false });
+        else { if (r.error) emit({ type: 'error', text: r.error }); emit({ type: 'final', text: sawText ? '' : (r.response || ''), isError: true }); }
+      }
     });
     return { feed: lb.feed, end: lb.flush };
-  },
-  /** Make interactive `gemini` go straight to "Login with Google". */
-  prepareLogin() {
-    const file = path.join(home, '.gemini', 'settings.json');
-    let cfg = {};
-    try { cfg = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { /* new file */ }
-    const already = (cfg.security && cfg.security.auth && cfg.security.auth.selectedType) || cfg.selectedAuthType;
-    if (already) return;
-    cfg.security = cfg.security || {};
-    cfg.security.auth = { ...(cfg.security.auth || {}), selectedType: 'oauth-personal' };
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify(cfg, null, 2));
   },
 };
 
 function prettyGemini(id, display) {
   if (id === 'auto') return 'Gemini Auto';
-  const s = String(display && display !== id ? display : id).replace(/^gemini-/i, 'Gemini ');
-  return s.replace(/-/g, ' ').replace(/\b(pro|flash|lite|ultra)\b/gi, (w) => w[0].toUpperCase() + w.slice(1).toLowerCase());
+  const s = String(display && display !== id ? display : id);
+  return s.replace(/-/g, ' ').replace(/\b([a-z])/g, (c) => c.toUpperCase()).replace(/^Gpt\b/, 'GPT');
 }
 
 const PROVIDERS = { claude, codex, gemini };

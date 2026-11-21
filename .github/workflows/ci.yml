@@ -30,9 +30,40 @@ jobs:
         if: runner.os == 'Linux'
         run: xvfb-run -a npx electron . --smoke-test --no-sandbox
 
+  voice:
+    name: Speech recognition (Windows, real Whisper models)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Whisper large-v3 turbo — Arabic sample (CPU, as on a PC without a usable GPU)
+        shell: pwsh
+        run: |
+          $env:MAJLIS_DATA_DIR = "$env:RUNNER_TEMP\majlis-voice"
+          $env:MAJLIS_SELFTEST_OUT = "$env:RUNNER_TEMP\ar.json"
+          npx electron . "--voice-selftest=$PWD\test\fixtures\audio\ar-sample.wav"
+          $r = Get-Content $env:MAJLIS_SELFTEST_OUT -Raw -Encoding utf8 | ConvertFrom-Json
+          Write-Host "Arabic result:" ($r | ConvertTo-Json -Compress)
+          if (-not $r.ok) { throw "speech self-test failed: $($r.error)" }
+          if ($r.text -notmatch '[\u0600-\u06FF]') { throw "expected Arabic text, got: $($r.text)" }
+      - name: Whisper large-v3 turbo — English sample (model already cached)
+        shell: pwsh
+        run: |
+          $env:MAJLIS_DATA_DIR = "$env:RUNNER_TEMP\majlis-voice"
+          $env:MAJLIS_SELFTEST_OUT = "$env:RUNNER_TEMP\en.json"
+          npx electron . "--voice-selftest=$PWD\test\fixtures\audio\en-sample.wav"
+          $r = Get-Content $env:MAJLIS_SELFTEST_OUT -Raw -Encoding utf8 | ConvertFrom-Json
+          Write-Host "English result:" ($r | ConvertTo-Json -Compress)
+          if (-not $r.ok) { throw "speech self-test failed: $($r.error)" }
+          if ($r.text -notmatch 'coffee') { throw "unexpected transcript: $($r.text)" }
+
   build:
     name: Windows installer
-    needs: test
+    needs: [test, voice]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4

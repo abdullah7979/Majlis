@@ -33,7 +33,7 @@ function baseEnv() {
   if (isWin) {
     if (env.APPDATA) add.push(path.join(env.APPDATA, 'npm'));
     if (env.ProgramFiles) add.push(path.join(env.ProgramFiles, 'nodejs'));
-    if (env.LOCALAPPDATA) add.push(path.join(env.LOCALAPPDATA, 'Programs', 'nodejs'));
+    if (env.LOCALAPPDATA) add.push(path.join(env.LOCALAPPDATA, 'Programs', 'nodejs'), path.join(env.LOCALAPPDATA, 'agy', 'bin'));
     if (env.NVM_SYMLINK) add.push(env.NVM_SYMLINK);
   }
   for (const d of add) if (!dirs.includes(d)) dirs.push(d);
@@ -50,7 +50,7 @@ function augmentedEnv(extra = {}) {
   if (isWin) {
     if (env.APPDATA) add.push(path.join(env.APPDATA, 'npm'));
     if (env.ProgramFiles) add.push(path.join(env.ProgramFiles, 'nodejs'));
-    if (env.LOCALAPPDATA) add.push(path.join(env.LOCALAPPDATA, 'Programs', 'nodejs'));
+    if (env.LOCALAPPDATA) add.push(path.join(env.LOCALAPPDATA, 'Programs', 'nodejs'), path.join(env.LOCALAPPDATA, 'agy', 'bin'));
     if (env.NVM_SYMLINK) add.push(env.NVM_SYMLINK);
   } else {
     const home = os.homedir();

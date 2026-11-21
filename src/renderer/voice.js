@@ -1,7 +1,7 @@
 'use strict';
 /* global window, navigator, AudioContext, OfflineAudioContext, MediaRecorder, speechSynthesis, SpeechSynthesisUtterance, Blob */
 // Voice I/O for Majlis.
-//   Recorder: microphone -> automatic end-of-speech detection -> 16 kHz mono WAV
+//   Recorder: microphone -> automatic end-of-speech detection -> 16 kHz mono PCM (for Whisper)
 //   Speaker:  text -> system voices (Arabic or English picked per message)
 
 const Voice = (() => {
@@ -12,7 +12,7 @@ const Voice = (() => {
       this.stopped = null;
     }
 
-    /** Resolves with { wav: ArrayBuffer|null, spoke: boolean } once recording ends. */
+    /** Resolves with { pcm: Float32Array|null, spoke: boolean } once recording ends. */
     async record() {
       this.stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
@@ -34,9 +34,9 @@ const Voice = (() => {
       const done = new Promise((resolve) => {
         rec.onstop = async () => {
           this.cleanup();
-          if (!spoke || !chunks.length) return resolve({ wav: null, spoke });
-          try { resolve({ wav: await toWav16k(new Blob(chunks, { type: rec.mimeType })), spoke }); }
-          catch (e) { resolve({ wav: null, spoke, error: e }); }
+          if (!spoke || !chunks.length) return resolve({ pcm: null, spoke });
+          try { resolve({ pcm: await toPcm16k(new Blob(chunks, { type: rec.mimeType })), spoke }); }
+          catch (e) { resolve({ pcm: null, spoke, error: e }); }
         };
       });
       this.stopped = () => { if (rec.state !== 'inactive') rec.stop(); };
@@ -75,8 +75,8 @@ const Voice = (() => {
     }
   }
 
-  /** Decode any recorded blob and re-encode as 16 kHz mono 16-bit WAV (small, universally supported). */
-  async function toWav16k(blob) {
+  /** Decode any recorded/loaded audio and resample to 16 kHz mono Float32 (what Whisper expects). */
+  async function toPcm16k(blob) {
     const bytes = await blob.arrayBuffer();
     const tmp = new AudioContext();
     const decoded = await tmp.decodeAudioData(bytes.slice(0));
@@ -87,19 +87,7 @@ const Voice = (() => {
     s.buffer = decoded;
     s.connect(off.destination);
     s.start();
-    const pcm = (await off.startRendering()).getChannelData(0);
-    const out = new ArrayBuffer(44 + pcm.length * 2);
-    const v = new DataView(out);
-    const str = (o, t) => { for (let i = 0; i < t.length; i++) v.setUint8(o + i, t.charCodeAt(i)); };
-    str(0, 'RIFF'); v.setUint32(4, 36 + pcm.length * 2, true); str(8, 'WAVE');
-    str(12, 'fmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
-    v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
-    str(36, 'data'); v.setUint32(40, pcm.length * 2, true);
-    for (let i = 0; i < pcm.length; i++) {
-      const x = Math.max(-1, Math.min(1, pcm[i]));
-      v.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true);
-    }
-    return out;
+    return (await off.startRendering()).getChannelData(0);
   }
 
   // ------------------------------------------------------------------ speaking
@@ -180,7 +168,7 @@ const Voice = (() => {
   function stopSpeaking() { if (speaking) { const s = speaking; speaking = null; s.cancel(); } else speechSynthesis.cancel(); }
   function isSpeaking() { return !!speaking; }
 
-  return { Recorder, toWav16k, speak, stopSpeaking, isSpeaking, voicesReady, voices, speakable, pickVoice };
+  return { Recorder, toPcm16k, speak, stopSpeaking, isSpeaking, voicesReady, voices, speakable, pickVoice };
 })();
 
 window.Voice = Voice;

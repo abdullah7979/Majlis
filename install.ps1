@@ -1,6 +1,6 @@
 # Majlis one-line installer for Windows.
 #   irm https://raw.githubusercontent.com/abdullah7979/majlis/main/install.ps1 | iex
-# Installs (only what's missing): Node.js LTS, Claude Code, Codex CLI, Gemini CLI,
+# Installs (only what's missing): Node.js LTS, Claude Code, Codex CLI, Google Antigravity CLI (Gemini),
 # then the latest Majlis release, and launches it.
 
 $ErrorActionPreference = 'Stop'
@@ -36,11 +36,10 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
 Write-Host "Node.js $(node --version)" -ForegroundColor Green
 
 # 2) Official AI CLIs ----------------------------------------------------------
-Step 'Installing the official AI tools (Claude Code, Codex, Gemini CLI)'
+Step 'Installing the official AI tools (Claude Code, Codex, Google Antigravity)'
 $clis = @(
   @{ bin = 'claude'; pkg = '@anthropic-ai/claude-code' },
-  @{ bin = 'codex';  pkg = '@openai/codex' },
-  @{ bin = 'gemini'; pkg = '@google/gemini-cli' }
+  @{ bin = 'codex';  pkg = '@openai/codex' }
 )
 foreach ($c in $clis) {
   if (Get-Command $c.bin -ErrorAction SilentlyContinue) {
@@ -50,6 +49,15 @@ foreach ($c in $clis) {
     try { & npm install -g $c.pkg --no-fund --no-audit --loglevel=error | Out-Null; Write-Host "$($c.bin): installed" -ForegroundColor Green }
     catch { Write-Host "$($c.bin): failed (you can install it later from Majlis > Settings)" -ForegroundColor Yellow }
   }
+}
+# Gemini: Google replaced Gemini CLI with Antigravity CLI (agy) for personal accounts in June 2026.
+$agyBin = Join-Path $env:LOCALAPPDATA 'agy\bin'
+if ((Get-Command agy -ErrorAction SilentlyContinue) -or (Test-Path (Join-Path $agyBin 'agy.exe'))) {
+  Write-Host 'agy (Gemini): already installed' -ForegroundColor Green
+} else {
+  Write-Host 'Installing Google Antigravity CLI (Gemini)...'
+  try { irm https://antigravity.google/cli/install.ps1 | iex; Write-Host 'agy (Gemini): installed' -ForegroundColor Green }
+  catch { Write-Host 'agy: failed (you can install it later from Majlis > Settings)' -ForegroundColor Yellow }
 }
 Refresh-Path
 

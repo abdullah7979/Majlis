@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 // Strict stand-ins for claude / codex / gemini, modelled on the real CLIs
-// (Claude Code 2.1.x, Codex 0.171, Gemini CLI 0.70):
+// (Claude Code 2.1.x, Codex 0.171, Antigravity CLI agy 1.5.14 — verified on Windows):
 //   - unknown flags and invalid choices are rejected exactly like the real tools do
 //   - output uses the real JSON event formats
 //   - sessions are remembered so --resume / exec resume can be tested
@@ -16,14 +16,14 @@ const crypto = require('crypto');
 const name = process.argv[2];
 const argv = process.argv.slice(3);
 const mode = process.env[`FAKE_MODE_${name}`] || 'ok';
-const MODELS = { claude: ['fable', 'opus', 'sonnet', 'haiku'], gemini: ['auto', 'gemini-2.5-pro', 'gemini-3.5-flash', 'gemini-3.1-flash-lite'], codex: ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-5.5'] };
+const MODELS = { claude: ['fable', 'opus', 'sonnet', 'haiku'], agy: ['gemini-3.8-flash-medium', 'gemini-3.8-flash-lite', 'gemini-4-pro-high'], codex: ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-5.5'] };
 
 function die(msg, code = 2) { process.stderr.write(msg + '\n'); process.exit(code); }
 
 const SPECS = {
   claude: { bool: ['-p', '--print', '--verbose', '--include-partial-messages'], value: { '--output-format': ['text', 'json', 'stream-json'], '--model': null, '--resume': null, '--permission-mode': ['acceptEdits', 'auto', 'bypassPermissions', 'manual', 'dontAsk', 'plan'], '--effort': ['low', 'medium', 'high', 'xhigh', 'max'] } },
   codex: { bool: ['--skip-git-repo-check', '--json', '--dangerously-bypass-approvals-and-sandbox', '--last', '--ephemeral'], value: { '--output-last-message': null, '-o': null, '-m': null, '--model': null, '-c': null, '--config': null } },
-  gemini: { bool: ['--skip-trust', '-y', '--yolo'], value: { '-p': null, '--prompt': null, '-o': ['text', 'json', 'stream-json'], '--output-format': ['text', 'json', 'stream-json'], '-m': null, '--model': null, '--approval-mode': ['default', 'auto_edit', 'yolo', 'plan'], '--resume': null, '-r': null } },
+  agy: { bool: ['--dangerously-skip-permissions', '--disable-slash-commands', '-c', '--continue', '--sandbox', '--new-project'], value: { '-p': null, '--print': null, '--prompt': null, '--input-format': ['text', 'stream-json'], '--output-format': ['text', 'json', 'stream-json'], '--model': null, '--mode': null, '--conversation': null, '--effort': ['low', 'medium', 'high', 'xhigh', 'max'], '--print-timeout': null, '--project': null } },
 };
 function parse(spec, args) {
   const flags = {}, pos = [];
@@ -53,7 +53,7 @@ const sessions = (() => { try { return JSON.parse(fs.readFileSync(sessFile, 'utf
 const saveSessions = () => fs.writeFileSync(sessFile, JSON.stringify(sessions));
 const uuid = () => crypto.randomUUID();
 
-if (argv[0] === '--version' || argv[0] === '-v') { console.log(name === 'codex' ? 'codex-cli 0.171.0' : name === 'claude' ? '2.1.330 (Claude Code)' : '0.70.0'); process.exit(0); }
+if (argv[0] === '--version' || argv[0] === '-v') { console.log(name === 'codex' ? 'codex-cli 0.171.0' : name === 'claude' ? '2.1.330 (Claude Code)' : '1.5.14'); process.exit(0); }
 if (name === 'codex' && argv[0] === 'debug' && argv[1] === 'models') {
   console.log(JSON.stringify({ models: [
     { slug: 'gpt-6.2-sol', display_name: 'GPT-6.2-Sol', visibility: 'list', priority: 1 },
@@ -63,8 +63,10 @@ if (name === 'codex' && argv[0] === 'debug' && argv[1] === 'models') {
   ] }));
   process.exit(0);
 }
-if (name === 'gemini' && argv[0] === 'models') {
-  console.log(JSON.stringify(MODELS.gemini.map((id) => ({ id, modelId: id, displayName: id === 'auto' ? 'Auto' : id }))));
+if (name === 'agy' && argv[0] === 'models') {
+  console.log('Fetching available models...');
+  if (mode === 'auth') { console.log('Error: Please sign in to view available models. Launch the CLI without arguments to sign in.'); process.exit(1); }
+  console.log('Available models:'); for (const m of MODELS.agy) console.log(`  ${m}${m.includes('medium') ? '  (default)' : ''}`);
   process.exit(0);
 }
 
@@ -83,39 +85,54 @@ function main() {
   const { flags, pos } = parse(SPECS[name], args);
   if (codexResume) { resume = pos.find((x) => x !== '-') || null; if (!resume) die('error: resume needs a session id'); }
   if (name === 'claude') resume = flags['--resume'] || null;
-  if (name === 'gemini') resume = flags['--resume'] || flags['-r'] || null;
+  if (name === 'agy') {
+    resume = flags['--conversation'] || null;
+    if (flags['--mode'] && !['accept-edits', 'auto', 'plan'].includes(flags['--mode'])) process.stderr.write(`warning: unrecognized --mode value "${flags['--mode']}" (valid: accept-edits, auto, plan)\n`);
+    if (flags['--input-format'] === 'stream-json') {
+      if (flags['--output-format'] !== 'stream-json') die('error: --input-format stream-json requires --output-format stream-json');
+      const lines = input.split('\n').filter((l) => l.trim());
+      if (!lines.length) die('error: empty prompt', 1);
+      let msg; try { msg = JSON.parse(lines[0]); } catch (_) { die('error: invalid JSON on stdin', 1); }
+      if (msg.event !== 'user') die('error: missing event field', 1);
+      input = msg.message.content;
+    } else if (!flags['-p'] && !flags['--print']) die('fake: interactive mode not supported');
+  }
 
   if (process.env.FAKE_LOG) fs.appendFileSync(process.env.FAKE_LOG, JSON.stringify({ name, args: argv, cwd: process.cwd(), input }) + '\n');
 
   // Real-CLI requirements (these are what broke v0.2 on a real PC):
   if (name === 'claude' && !flags['-p'] && !flags['--print']) die('fake: interactive mode not supported');
   if (name === 'claude' && flags['--output-format'] === 'stream-json' && !flags['--verbose']) die('Error: When using --print, --output-format=stream-json requires --verbose');
-  if (name === 'gemini' && !('-p' in flags || '--prompt' in flags)) die('fake: gemini needs -p for headless mode');
-  if (name === 'gemini' && !flags['--skip-trust'] && process.env.GEMINI_CLI_TRUST_WORKSPACE !== 'true') {
-    die('Gemini CLI is not running in a trusted directory. To proceed, either use `--skip-trust`, set the `GEMINI_CLI_TRUST_WORKSPACE=true` environment variable, or trust this directory in interactive mode.', 55);
-  }
+
   if (name === 'codex' && !flags['--skip-git-repo-check']) die('Not inside a trusted directory and --skip-git-repo-check was not specified.', 1);
 
   const model = flags['--model'] || flags['-m'] || '';
-  const fullInput = input + (name === 'gemini' && flags['-p'] ? flags['-p'] : '');
+  const fullInput = input;
   const tail = fullInput.trim().split('\n').pop();
 
+  if (name === 'agy' && mode === 'auth') {
+    // real agy: prints a URL and blocks for 60 s waiting for the browser sign-in
+    process.stderr.write('Authentication required. Please visit the URL to log in:\n  https://accounts.google.com/o/oauth2/auth?x=1\n\nWaiting for authentication (timeout 60s)...\n');
+    setTimeout(() => { console.log(JSON.stringify({ event: 'result', result: { conversation_id: '', status: 'ERROR', response: '', error: 'authentication failed or timed out' } })); process.exit(1); }, 60000);
+    return;
+  }
   if (mode === 'limit') {
     if (name === 'claude') { console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: 'Claude AI usage limit reached. Your limit will reset at 5pm.' })); process.exit(1); }
     if (name === 'codex') { console.log(JSON.stringify({ type: 'thread.started', thread_id: uuid() })); console.log(JSON.stringify({ type: 'turn.failed', error: { message: "You've hit your usage limit. Try again in 2 hours." } })); process.exit(1); }
-    console.log(JSON.stringify({ type: 'result', status: 'error', error: { type: 'QuotaError', message: 'RESOURCE_EXHAUSTED: quota exceeded' } })); process.exit(1);
+    console.log(JSON.stringify({ event: 'result', result: { conversation_id: uuid(), status: 'ERROR', response: '', error: 'RESOURCE_EXHAUSTED: You have exhausted your quota. Please retry in 34s.' } })); process.exit(1);
   }
   if (mode === 'auth') die('Error: Not logged in. Please run /login', 1);
   if (mode === 'slow') { setTimeout(() => console.log('late'), 60000); return; }
   if ((mode === 'badmodel' && model) || (model && !MODELS[name].includes(model))) {
     if (name === 'codex') { console.log(JSON.stringify({ type: 'turn.failed', error: { message: `The model \`${model}\` does not exist or you do not have access to it.` } })); process.exit(1); }
+    if (name === 'agy') { console.log(JSON.stringify({ event: 'result', result: { conversation_id: '', status: 'ERROR', response: '', error: `unknown model "${model}": model not found` } })); process.exit(1); }
     die(`API Error: model "${model}" not found`, 1);
   }
 
   let sid = resume, turns = 0;
   if (resume) {
     if (!sessions[resume]) {
-      if (name === 'gemini') die(`Invalid session identifier "${resume}". Use --list-sessions to see available sessions.`, 1);
+      if (name === 'agy') { console.log(JSON.stringify({ event: 'result', result: { conversation_id: resume, status: 'ERROR', response: '', error: `conversation ${resume} not found` } })); process.exit(1); }
       if (name === 'claude') { console.log(JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: `No conversation found with session ID: ${resume}` })); process.exit(1); }
       die(`Error: thread ${resume} not found`, 1);
     }
@@ -149,10 +166,10 @@ function main() {
     const out = flags['--output-last-message'] || flags['-o'];
     if (out) fs.writeFileSync(out, answer, 'utf8');
   } else {
-    console.log(JSON.stringify({ type: 'init', session_id: sid, model: model || 'auto' }));
-    console.log(JSON.stringify({ type: 'message', role: 'user', content: fullInput.slice(0, 20) }));
-    console.log(JSON.stringify({ type: 'tool_use', tool_name: 'read_file', tool_id: 't1', parameters: { file_path: 'notes.txt' } }));
-    for (const part of [answer.slice(0, 4), answer.slice(4)]) console.log(JSON.stringify({ type: 'message', role: 'assistant', content: part, delta: true }));
-    console.log(JSON.stringify({ type: 'result', status: 'success', stats: {} }));
+    console.log(JSON.stringify({ event: 'init', cwd: process.cwd(), tools: ['read_file'], permission_mode: flags['--mode'] || 'auto', model: model || 'gemini-3.8-flash-medium' }));
+    console.log(JSON.stringify({ event: 'step_update', conversation_id: sid, step_index: 0, state: 'DONE', step_type: 'user_input' }));
+    console.log(JSON.stringify({ event: 'step_update', conversation_id: sid, step_index: 1, state: 'ACTIVE', step_type: 'tool', tool_name: 'read_file', tool_info: { path: 'notes.txt' } }));
+    for (const part of [answer.slice(0, 4), answer.slice(4)]) console.log(JSON.stringify({ event: 'step_update', conversation_id: sid, step_index: 2, state: 'ACTIVE', step_type: 'agent_response', text_delta: part }));
+    console.log(JSON.stringify({ event: 'result', result: { conversation_id: sid, status: 'SUCCESS', response: answer, duration_seconds: 0.1, num_turns: 1 } }));
   }
 }

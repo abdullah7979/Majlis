@@ -47,10 +47,16 @@ class Orchestrator {
     this.catalogLoading = Promise.all(Object.values(this.providers).map(async (p) => {
       if (!p.listModelsArgs) return;
       const c = state.models[p.id];
-      if (!force && c && Date.now() - c.at < CATALOG_TTL && c.list.length) return;
+      const authUnknown = p.authProbe && !(state.auth && state.auth[p.id]);
+      if (!force && !authUnknown && c && Date.now() - c.at < CATALOG_TTL && c.list.length) return;
       const bin = await which(p.bin);
       if (!bin) return;
       const r = await run(bin, p.listModelsArgs, { timeoutMs: 30000, env: augmentedEnv(p.runEnv || {}) });
+      const all = `${r.stdout || ''}\n${r.stderr || ''}`;
+      if (p.authProbe) {
+        if (p.authRequiredRe.test(all)) { this.store.markAuth(p.id, false); return; }
+        if (r.code === 0) this.store.markAuth(p.id, true);
+      }
       try {
         const list = p.parseModels(r.stdout || '');
         if (list.length) state.models[p.id] = { at: Date.now(), list };
@@ -91,7 +97,7 @@ class Orchestrator {
       out[p.id] = {
         id: p.id, label: p.label, vendor: p.vendor, npmPackage: p.npmPackage, loginCommand: p.loginCommand,
         installed: !!bin, path: bin, version,
-        signedIn: bin ? credentialsPresent(p) || this.store.authKnownGood(p.id) : false,
+        signedIn: bin ? (p.authProbe ? this.store.authKnownGood(p.id) : credentialsPresent(p) || this.store.authKnownGood(p.id)) : false,
         searched: bin ? null : searchedDirs(env),
         enabled: !!(s.providers[p.id] && s.providers[p.id].enabled),
         cooldownUntil: this.store.cooldownUntil(p.id),
@@ -106,10 +112,13 @@ class Orchestrator {
     const s = this.store.getSettings();
     return !!this.providers[id] && !!(s.providers[id] && s.providers[id].enabled) && !this.store.cooldownUntil(id);
   }
-  isReady(id) {
+  /** Known to be signed out (only for CLIs whose sign-in we can't see on disk). */
+  knownSignedOut(id) {
     const p = this.providers[id];
-    return !!p && this.isUsable(id) && !(p.strictCredentials && !credentialsPresent(p));
+    const a = (this.store.state.auth || {})[id];
+    return !!(p && p.authProbe && a && a.ok === false);
   }
+  isReady(id) { return this.isUsable(id) && !this.knownSignedOut(id); }
 
   // ------------------------------------------------------------ routing
   pickHelper(candidates) { return candidates.find((c) => this.isReady(c.provider)) || null; }
@@ -122,7 +131,7 @@ class Orchestrator {
     const s = this.store.getSettings();
     const h = heuristicClassify(text, { attachments });
     if (h.confident || !smart || !s.smartRouting || text.trim().length < 25) return h;
-    const helper = this.pickHelper([{ provider: 'gemini', model: '@fast' }, { provider: 'claude', model: 'haiku' }]);
+    const helper = this.pickHelper([{ provider: 'claude', model: 'haiku' }, { provider: 'gemini', model: '@fast' }]);
     if (!helper) return h;
     const r = await this.runOnce(helper.provider, this.resolveModel(helper.provider, helper.model), buildClassifierPrompt(text), {
       cwd: os.tmpdir(), autonomy: 'safe', timeoutMs: 20000, signal, emit: () => {},
@@ -148,38 +157,6 @@ class Orchestrator {
     return until;
   }
 
-  // ------------------------------------------------------------ voice
-  /** Speech-to-text through Gemini (excellent with Arabic dialects), on the user's own subscription. */
-  async transcribe(wavPath, { language = 'auto' } = {}) {
-    const v = this.store.getSettings().voice || {};
-    const helper = this.pickHelper([{ provider: 'gemini', model: v.model || '@flash' }]);
-    if (!helper) return { ok: false, kind: this.providers.gemini && !credentialsPresent(this.providers.gemini) ? 'auth' : 'unavailable' };
-    const name = path.basename(wavPath);
-    const hint = language === 'ar' ? 'The speaker most likely speaks Arabic (often Saudi/Gulf dialect).' : 'The speaker may speak Arabic (often Saudi/Gulf dialect) or English, or mix both.';
-    const prompt = [
-      `@${name}`,
-      '',
-      `Transcribe the speech in the audio file ${name}.`,
-      hint,
-      'Rules: write exactly what was said, in the original language and script — Arabic in Arabic script keeping the dialect words, English words in English.',
-      'Do not translate, summarize, answer, or add any preface, quotes or notes. Add normal punctuation.',
-      'If there is no intelligible speech, output exactly: [silence]',
-      'Output only the transcript.',
-    ].join('\n');
-    const r = await this.runOnce(helper.provider, this.resolveModel('gemini', helper.model), prompt, {
-      cwd: path.dirname(wavPath), autonomy: 'safe', timeoutMs: 90000, emit: () => {},
-    });
-    if (!r.ok) {
-      if (r.failure.kind === 'limit') this.coolDown(helper.provider, r.failure.resetAt);
-      return { ok: false, kind: r.failure.kind, message: r.failure.message };
-    }
-    let text = r.text.trim()
-      .replace(/^(here('s| is) (the )?transcript(ion)?:?|transcript(ion)?:)\s*/i, '')
-      .replace(/^["“”«]+|["“”»]+$/g, '').trim();
-    if (/^\[?silence\]?$/i.test(text)) text = '';
-    return { ok: true, text };
-  }
-
   // ------------------------------------------------------------ prompt
   /**
    * Build the prompt. With `since` (index into conv.messages) only the turns after that point are
@@ -197,7 +174,11 @@ class Orchestrator {
       if (ctx.length + piece.length > MAX_CONTEXT_CHARS) break;
       ctx = piece + ctx;
     }
-    let prompt = '';
+    // Reply language follows the user (an Arabic question got an English answer from Claude Haiku on a real PC).
+    const arabic = /[\u0600-\u06FF]/.test(text);
+    let prompt = arabic
+      ? '(Reply in Arabic, in the same dialect and tone the user uses, unless they ask for another language. Keep code, commands and technical names as they are.)\n\n'
+      : '';
     if (ctx) {
       prompt += since == null
         ? 'Below is the earlier part of this conversation. Earlier replies may come from a different AI assistant; continue seamlessly as if you wrote them. Do not mention the handover.\n\n'
@@ -221,7 +202,8 @@ class Orchestrator {
    */
   async runOnce(providerId, model, prompt, { cwd, autonomy, timeoutMs, signal, emit, resumeId = null, freshPrompt = null }) {
     const p = this.providers[providerId];
-    let optional = true, usedModel = model, resume = resumeId, input = prompt, attempt = 0;
+    const fmt = (x) => (p.formatInput ? p.formatInput(x) : x);
+    let optional = true, usedModel = model, resume = resumeId, input = fmt(prompt), attempt = 0;
     const bin = (await which(p.bin)) || p.bin; // full path avoids PATH differences between shells
     while (attempt++ < 4) {
       const outFile = p.needsOutputFile ? path.join(os.tmpdir(), `majlis-${process.pid}-${Date.now()}-${attempt}.txt`) : null;
@@ -236,11 +218,24 @@ class Orchestrator {
         else if (e.type === 'session') sessionId = e.id;
         else if (e.type === 'error') errors.push(e.text);
       });
+      // Some CLIs wait for an interactive sign-in when signed out; stop them at once instead.
+      const local = new AbortController();
+      const onOuter = () => local.abort();
+      if (signal) { if (signal.aborted) local.abort(); else signal.addEventListener('abort', onOuter); }
+      let authRequired = false;
+      const watch = (d) => { if (p.authRequiredRe && !authRequired && p.authRequiredRe.test(d)) { authRequired = true; local.abort(); } };
       const r = await run(bin, args, {
-        cwd, input, timeoutMs, signal, env: p.runEnv ? augmentedEnv(p.runEnv) : undefined,
-        onStdout: (d) => parser.feed(d),
+        cwd, input, timeoutMs, signal: local.signal, env: p.runEnv ? augmentedEnv(p.runEnv) : undefined,
+        onStdout: (d) => { watch(d); parser.feed(d); },
+        onStderr: watch,
       });
+      if (signal) signal.removeEventListener('abort', onOuter);
       parser.end();
+      if (authRequired) {
+        if (p.authProbe) this.store.markAuth(p.id, false);
+        return { ok: false, failure: { kind: 'auth' }, text: '' };
+      }
+      if (r.cancelled && signal && !signal.aborted) r.cancelled = false;
       if (outFile) {
         try { const t = fs.readFileSync(outFile, 'utf8'); if (t.trim()) final = t; } catch (_) {}
         try { fs.unlinkSync(outFile); } catch (_) {}
@@ -253,7 +248,7 @@ class Orchestrator {
       const failure = classifyFailure({ ...r, stdout: `${errText}\n${r.stdout}\n${final || ''}`, finalText: text });
       if (!failure.message && errText) failure.message = errText.slice(-800);
       if (resume && (SESSION_ERROR_RE.test(`${errText}\n${r.stderr}\n${r.stdout}`) || failure.kind === 'error')) {
-        resume = null; input = freshPrompt || prompt; emit({ type: 'retry', reason: 'session' }); continue;
+        resume = null; input = fmt(freshPrompt || prompt); emit({ type: 'retry', reason: 'session' }); continue;
       }
       if (failure.kind === 'bad_flag' && optional) { optional = false; emit({ type: 'retry', reason: 'bad_flag' }); continue; }
       if (failure.kind === 'bad_model' && usedModel) { usedModel = ''; emit({ type: 'retry', reason: 'bad_model', model }); continue; }
@@ -317,7 +312,7 @@ class Orchestrator {
           send({ type: 'skip', provider: step.provider, model, why, until: this.store.cooldownUntil(step.provider) });
           continue;
         }
-        if (p.strictCredentials && !credentialsPresent(p)) {
+        if (this.knownSignedOut(step.provider)) {
           aiMsg.trail.push({ provider: step.provider, model, outcome: 'auth' });
           send({ type: 'fallback', provider: step.provider, label: p.label, kind: 'auth' });
           continue;

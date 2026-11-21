@@ -357,6 +357,22 @@ async function sendCurrent({ voice = false } = {}) {
 // ------------------------------------------------------------------ voice
 const V = { state: 'idle', mode: false, rec: null, awaiting: null, empties: 0 };
 function voiceSettings() { return (S.settings && S.settings.voice) || {}; }
+function asrLanguage() { const l = voiceSettings().language || 'auto'; return l === 'auto' ? (S.lang === 'ar' ? 'ar' : 'auto') : l; }
+/** Speech model: download/load in the background so the first mic press is instant. */
+function initASR() {
+  if (!window.ASR) { window.addEventListener('asr-ready', initASR, { once: true }); return; }
+  window.ASR.onStatus((st) => {
+    if (V.state === 'transcribing' && st.status === 'loading') $('#vbText').textContent = `${t('voice_loading_model')} ${st.progress}%`;
+    const el = $('#asrStatus'); if (el) el.textContent = asrStatusText(st);
+  });
+  if (voiceSettings().preload !== false) setTimeout(() => window.ASR.load(voiceSettings().model).catch(() => {}), 4000);
+}
+function asrStatusText(st) {
+  if (st.status === 'ready') return `${t('asr_ready')} · ${st.device === 'webgpu' ? t('asr_gpu') : t('asr_cpu')}`;
+  if (st.status === 'loading') return `${t('voice_loading_model')} ${st.progress}%`;
+  if (st.status === 'error') return `✖ ${st.error}`;
+  return t('asr_idle');
+}
 function setVoiceUI(state, text) {
   V.state = state;
   const bar = $('#voiceBar');
@@ -386,18 +402,18 @@ async function listen() {
   catch (e) { setVoiceUI('idle'); V.mode = false; setVoiceUI('idle'); toast(t('mic_denied')); return; }
   V.rec = null;
   if (V.state !== 'listening') return; // cancelled meanwhile
-  if (!res.wav) {
+  if (!res.pcm) {
     if (V.mode && ++V.empties < 2) return listen();
     V.empties = 0; V.mode = false; setVoiceUI('idle'); return;
   }
   V.empties = 0;
-  setVoiceUI('transcribing');
-  const r = await api.voice.transcribe({ wav: res.wav, language: S.lang });
-  if (!r.ok) {
-    V.mode = false; setVoiceUI('idle');
-    if (r.kind === 'auth' || r.kind === 'unavailable') { toast(t('voice_needs_gemini')); signIn('gemini'); }
-    else toast(t('voice_failed'));
-    return;
+  let r;
+  try {
+    if (window.ASR.status().status !== 'ready') setVoiceUI('transcribing', t('voice_loading_model'));
+    else setVoiceUI('transcribing');
+    r = await window.ASR.transcribe(res.pcm, { language: asrLanguage(), model: voiceSettings().model });
+  } catch (e) {
+    V.mode = false; setVoiceUI('idle'); toast(`${t('voice_failed')} ${e && e.message ? '(' + e.message + ')' : ''}`); return;
   }
   if (!r.text) { if (V.mode) return listen(); setVoiceUI('idle'); return; }
   const input = $('#input');
@@ -629,7 +645,7 @@ function paneGeneral(pane) {
       } }, t('test_voice')))),
     micTestField()));
 }
-/** Record one sentence and show what Gemini understood — a one-click end-to-end voice check. */
+/** Record one sentence and show what was understood — a one-click end-to-end voice check. */
 function micTestField() {
   const out = h('div', { class: 'out', dir: 'auto' }, t('mic_test_hint'));
   const btn = h('button', { class: 'btn primary', onclick: async () => {
@@ -637,16 +653,21 @@ function micTestField() {
     try {
       const rec = new Voice.Recorder({ noSpeechMs: 8000 });
       const res = await rec.record();
-      if (!res.wav) { out.textContent = '—'; return; }
+      if (!res.pcm) { out.textContent = '—'; return; }
       out.textContent = t('mic_test_working');
-      const started = Date.now();
-      const r = await api.voice.transcribe({ wav: res.wav, language: S.lang });
-      const secs = ((Date.now() - started) / 1000).toFixed(1);
-      out.textContent = r.ok ? `${r.text || '—'}   (${secs}s)` : `✖ ${r.kind}${r.message ? ': ' + r.message : ''}`;
-    } catch (e) { out.textContent = t('mic_denied'); }
+      const r = await window.ASR.transcribe(res.pcm, { language: asrLanguage(), model: voiceSettings().model });
+      out.textContent = `${r.text || '—'}   (${(r.ms / 1000).toFixed(1)}s · ${r.device === 'webgpu' ? t('asr_gpu') : t('asr_cpu')})`;
+    } catch (e) { out.textContent = e && e.name === 'NotAllowedError' ? t('mic_denied') : `✖ ${(e && e.message) || e}`; }
     finally { btn.disabled = false; }
   } }, `🎙 ${t('mic_test')}`);
-  return h('div', { class: 'field', style: 'display:block' }, h('label', {}, t('mic_test')), h('div', { class: 'mic-test', style: 'margin-top:8px' }, btn, out));
+  const lang = h('select', { onchange: (e) => saveSettings({ voice: { language: e.target.value } }) },
+    h('option', { value: 'auto' }, t('lang_auto')), h('option', { value: 'ar' }, 'العربية'), h('option', { value: 'en' }, 'English'));
+  lang.value = voiceSettings().language || 'auto';
+  const st = window.ASR ? window.ASR.status() : { status: 'idle' };
+  return h('div', {},
+    field(t('speech_lang'), lang),
+    field(t('speech_engine'), h('span', { id: 'asrStatus', class: 'help', style: 'margin:0' }, asrStatusText(st))),
+    h('div', { class: 'field', style: 'display:block' }, h('label', {}, t('mic_test')), h('div', { class: 'mic-test', style: 'margin-top:8px' }, btn, out)));
 }
 
 function paneAbout(pane) {
@@ -678,6 +699,23 @@ async function showOnboarding() {
       h('button', { class: 'btn primary', onclick: finish }, t('ob_done'))));
   overlay(box);
   async function finish() { await saveSettings({ onboarded: true }); closeOverlay(); refreshProviders(); $('#input').focus(); }
+}
+
+// ------------------------------------------------------------------ voice self-test (CI / diagnostics)
+async function runVoiceSelftest({ file, model }) {
+  try {
+    while (!window.ASR) await new Promise((r) => setTimeout(r, 200));
+    const url = 'file:///' + file.replace(/\\/g, '/').replace(/^\/+/, '');
+    const blob = await (await fetch(url)).blob();
+    const pcm = await Voice.toPcm16k(blob);
+    const t0 = Date.now();
+    await window.ASR.load(model || voiceSettings().model);
+    const loadMs = Date.now() - t0;
+    const r = await window.ASR.transcribe(pcm, { language: 'auto', model: model || voiceSettings().model });
+    await api.selftestResult({ ok: !!r.text, text: r.text, ms: r.ms, loadMs, device: r.device, seconds: +(pcm.length / 16000).toFixed(1) });
+  } catch (e) {
+    await api.selftestResult({ ok: false, error: String((e && e.stack) || e) });
+  }
 }
 
 // ------------------------------------------------------------------ boot
@@ -729,6 +767,8 @@ async function boot() {
   $('#voiceModeBtn').onclick = toggleVoiceMode;
   $('#vbStop').onclick = onVoiceBarButton;
   await Promise.all([refreshConvs(), refreshProviders()]);
+  initASR();
+  if (S.info.voiceSelftest) { runVoiceSelftest(S.info.voiceSelftest); return; }
   showWelcome();
   setInterval(refreshProviders, 60000);
   if (!S.settings.onboarded) await showOnboarding();

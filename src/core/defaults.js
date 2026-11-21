@@ -16,7 +16,7 @@ const DEFAULT_ROUTES = {
 };
 
 const DEFAULT_SETTINGS = {
-  schema: 3,
+  schema: 4,
   language: null, // null = follow system
   onboarded: false,
   smartRouting: true,
@@ -32,7 +32,10 @@ const DEFAULT_SETTINGS = {
   customModels: { claude: [], codex: [], gemini: [] },
   routes: DEFAULT_ROUTES,
   voice: {
-    model: '@flash', // transcription model: the newest Gemini Flash from the live list
+    engine: 'whisper',         // speech-to-text runs on this PC (Whisper large-v3 turbo); no account needed
+    model: 'onnx-community/whisper-large-v3-turbo',
+    language: 'auto',          // 'auto' | 'ar' | 'en'
+    preload: true,             // download/load the speech model in the background at startup
     autoSend: true,            // send as soon as you stop talking
     speakReplies: true,        // in voice conversation mode, read answers aloud
     voiceName: '',             // preferred system voice ('' = best Arabic/English voice available)

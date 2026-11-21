@@ -1,6 +1,6 @@
 'use strict';
 // End-to-end engine tests against STRICT fake CLIs modelled on the real tools
-// (Claude Code 2.1.x, Codex 0.171, Gemini CLI 0.70): any flag the real CLI would
+// (Claude Code 2.1.x, Codex 0.171, Antigravity CLI 1.5.14): any flag the real CLI would
 // reject is rejected here too. On Windows CI these also exercise .cmd spawning,
 // argument quoting and UTF-8 (Arabic) stdin.
 const test = require('node:test');
@@ -28,7 +28,7 @@ async function send(orch, conv, text, extra = {}) {
   const msg = await orch.send({ conversationId: conv.id, text, ...extra }, (e) => events.push(e));
   return { msg, events, types: events.map((e) => e.type) };
 }
-const callsOf = (n) => fake.calls().filter((c) => c.name === n);
+const callsOf = (n) => fake.calls().filter((c) => c.name === (n === 'gemini' ? 'agy' : n));
 
 test('heavy coding goes to Claude Opus instantly (keywords) and streams text', async () => {
   const { orch, conv } = await setup();
@@ -44,15 +44,15 @@ test('heavy coding goes to Claude Opus instantly (keywords) and streams text', a
   assert.deepEqual(a.slice(a.indexOf('--permission-mode'), a.indexOf('--permission-mode') + 2), ['--permission-mode', 'acceptEdits']);
 });
 
-test('ambiguous request asks the fastest Gemini model to route it', async () => {
+test('ambiguous request asks the fastest model (Claude Haiku) to route it', async () => {
   const { orch, conv } = await setup();
   process.env.FAKE_CLASSIFY = 'writing';
   const { msg } = await send(orch, conv, 'ابغى شي يساعدني في موضوع الشغل حق بكرة لو تكرمت');
   assert.equal(msg.routeSource, 'smart');
   assert.equal(msg.category, 'writing');
   const router = fake.calls().find((c) => c.input.includes('You are a router'));
-  assert.equal(router.name, 'gemini');
-  assert.ok(router.args.includes('gemini-3.1-flash-lite'), router.args.join(' '));
+  assert.equal(router.name, 'claude');
+  assert.ok(router.args.includes('haiku'), router.args.join(' '));
 });
 
 test('every autonomy level produces arguments the real CLIs accept', async () => {
@@ -65,12 +65,49 @@ test('every autonomy level produces arguments the real CLIs accept', async () =>
   }
 });
 
-test('Gemini runs trusted (--skip-trust + env) so headless mode works in any folder', async () => {
+test('Gemini (Antigravity) gets the prompt as a JSON event on stdin, Arabic intact', async () => {
   const { orch, conv } = await setup();
-  await send(orch, conv, 'hi', { force: 'gemini|' });
-  const c = callsOf('gemini')[0];
-  assert.ok(c.args.includes('--skip-trust'));
-  assert.ok(c.args.includes('stream-json'));
+  const { msg } = await send(orch, conv, 'مرحبا يا جيميناي\nسطر ثاني', { force: 'gemini|' });
+  assert.equal(msg.status, 'done', JSON.stringify(msg.trail));
+  const c = callsOf('agy')[0];
+  assert.deepEqual(c.args.slice(0, 4), ['--input-format', 'stream-json', '--output-format', 'stream-json']);
+  assert.ok(!c.args.some((x) => /مرحبا/.test(x)), 'prompt must not be on the command line');
+  assert.match(c.input, /مرحبا يا جيميناي\nسطر ثاني$/);
+  assert.match(msg.text, /^AGY\[default\]: سطر ثاني$/);
+});
+
+test('signed-out Antigravity is stopped at once (not after its 60 s wait) and skipped next time', async () => {
+  const { orch, conv, store } = await setup();
+  process.env.FAKE_MODE_agy = 'auth';
+  const t0 = Date.now();
+  const { msg, events } = await send(orch, conv, 'كيف حالك');
+  assert.ok(Date.now() - t0 < 15000, `took ${Date.now() - t0} ms`);
+  assert.ok(events.some((e) => e.type === 'fallback' && e.provider === 'gemini' && e.kind === 'auth'));
+  assert.equal(msg.provider, 'claude');
+  assert.equal(store.state.auth.gemini.ok, false);
+  fake.reset(); process.env.FAKE_MODE_agy = 'auth';
+  const second = await send(orch, conv, 'كيف حالك');
+  assert.ok(!callsOf('agy').length, 'known signed-out provider must not be started');
+  assert.equal(second.msg.provider, 'claude');
+});
+
+test('model refresh detects Antigravity sign-in state', async () => {
+  const { orch, store } = await setup();
+  assert.equal(store.state.auth.gemini.ok, true);
+  process.env.FAKE_MODE_agy = 'auth';
+  await orch.refreshCatalog(true);
+  assert.equal(store.state.auth.gemini.ok, false);
+  const st = await orch.providerStatus();
+  assert.equal(st.gemini.signedIn, false);
+});
+
+test('Arabic questions tell the model to answer in Arabic', async () => {
+  const { orch, conv } = await setup();
+  await send(orch, conv, 'كم عدد أيام السنة الكبيسة؟', { force: 'claude|haiku' });
+  assert.match(callsOf('claude')[0].input, /^\(Reply in Arabic/);
+  fake.reset();
+  await send(orch, conv, 'how many days in a leap year?', { force: 'claude|haiku' });
+  assert.doesNotMatch(callsOf('claude')[0].input, /Reply in Arabic/);
 });
 
 test('falls back when a provider hits its limit, cools it down, then skips it', async () => {
@@ -121,7 +158,7 @@ test('codex and gemini sessions resume too', async () => {
     const { msg } = await send(orch, conv, 'second question', { force: `${prov}|` });
     assert.match(msg.text, /\|turn 2\]: second question$/, prov);
     const a = callsOf(prov)[0].args;
-    assert.ok(prov === 'codex' ? a[1] === 'resume' : a.includes('--resume'), a.join(' '));
+    assert.ok(prov === 'codex' ? a[1] === 'resume' : a.includes('--conversation'), a.join(' '));
   }
 });
 
@@ -134,7 +171,7 @@ test('turns from other models are passed along when resuming', async () => {
   const c = callsOf('claude')[0];
   assert.ok(c.args.includes('--resume'));
   assert.match(c.input, /my name is Abdullah/);
-  assert.match(c.input, /GEMINI\[default\]/);
+  assert.match(c.input, /AGY\[default\]/);
   assert.doesNotMatch(c.input, /first to claude/);
 });
 
@@ -168,7 +205,7 @@ test('unknown model name retries with the CLI default model', async () => {
   const { orch, conv } = await setup();
   const { msg, events } = await send(orch, conv, 'compare these two', { force: 'gemini|gemini-1.0-retired' });
   assert.equal(msg.status, 'done');
-  assert.equal(msg.text, 'GEMINI[default]: compare these two');
+  assert.equal(msg.text, 'AGY[default]: compare these two');
   assert.ok(events.some((e) => e.type === 'retry' && e.reason === 'bad_model'));
 });
 
@@ -181,8 +218,7 @@ test('codex "model does not exist" in the JSON stream retries with default', asy
 test('signed-out provider is skipped (auth) without cooldown', async () => {
   const { orch, conv, store } = await setup();
   process.env.FAKE_MODE_claude = 'auth';
-  process.env.FAKE_CLASSIFY = 'writing';
-  const { msg, events } = await send(orch, conv, 'write an email to my boss about the report');
+  const { msg, events } = await send(orch, conv, 'اكتب لي إيميل رسمي لمديري');
   assert.equal(events.find((e) => e.type === 'fallback').kind, 'auth');
   assert.equal(store.cooldownUntil('claude'), null);
   assert.equal(msg.status, 'done');
@@ -197,7 +233,7 @@ test('forced provider/model bypasses routing', async () => {
 
 test('all providers exhausted -> failed with full trail', async () => {
   const { orch, conv } = await setup();
-  for (const n of ['claude', 'codex', 'gemini']) process.env[`FAKE_MODE_${n}`] = 'limit';
+  for (const n of ['claude', 'codex', 'agy']) process.env[`FAKE_MODE_${n}`] = 'limit';
   const { msg, types } = await send(orch, conv, 'fix the bug in this python code');
   assert.equal(msg.status, 'failed');
   assert.equal(msg.trail.length, 3);
@@ -207,7 +243,7 @@ test('all providers exhausted -> failed with full trail', async () => {
 
 test('cancel stops a running request', async () => {
   const { orch, conv } = await setup();
-  process.env.FAKE_MODE_gemini = 'slow';
+  process.env.FAKE_MODE_agy = 'slow';
   const p = send(orch, conv, 'hi there', { force: 'gemini|' });
   await new Promise((r) => setTimeout(r, 1500));
   orch.cancel(conv.id);
@@ -222,7 +258,7 @@ test('workspace folder is the working directory; attachments listed in prompt', 
   const src = path.join(ws, 'notes.txt'); fs.writeFileSync(src, 'x');
   const [att] = store.importAttachments(conv.id, [src]);
   await send(orch, conv, 'لخص الملف', { attachments: [att], force: 'gemini|' });
-  const call = callsOf('gemini')[0];
+  const call = callsOf('agy')[0];
   assert.equal(fs.realpathSync(call.cwd), fs.realpathSync(ws));
   assert.ok(call.input.includes(att));
 });
@@ -241,55 +277,30 @@ test('live model catalog: every model each subscription offers', async () => {
   const st = await orch.providerStatus();
   for (const id of ['claude', 'codex', 'gemini']) assert.equal(st[id].installed, true, id);
   assert.equal(st.codex.version, '0.171.0');
+  assert.equal(st.gemini.version, '1.5.14');
   assert.deepEqual(st.claude.models.map((m) => m.id), ['fable', 'opus', 'sonnet', 'haiku']);
   assert.deepEqual(st.codex.models.map((m) => m.id), ['gpt-6.2-sol', 'gpt-6.2-astra', 'gpt-5.5']);
-  assert.deepEqual(st.gemini.models.map((m) => m.id), ['auto', 'gemini-2.5-pro', 'gemini-3.5-flash', 'gemini-3.1-flash-lite']);
-  assert.equal(orch.resolveModel('gemini', '@flash'), 'gemini-3.5-flash');
-  assert.equal(orch.resolveModel('gemini', '@fast'), 'gemini-3.1-flash-lite');
-  assert.equal(orch.resolveModel('gemini', '@best'), 'gemini-2.5-pro');
+  assert.deepEqual(st.gemini.models.map((m) => m.id), ['gemini-3.8-flash-medium', 'gemini-3.8-flash-lite', 'gemini-4-pro-high']);
+  assert.equal(st.gemini.signedIn, true);
+  assert.equal(orch.resolveModel('gemini', '@flash'), 'gemini-3.8-flash-medium');
+  assert.equal(orch.resolveModel('gemini', '@fast'), 'gemini-3.8-flash-lite');
+  assert.equal(orch.resolveModel('gemini', '@best'), 'gemini-4-pro-high');
 });
 
 test('quick questions use the newest Gemini Flash from the live list', async () => {
   const { orch, conv } = await setup();
   const { msg } = await send(orch, conv, 'كيف حالك');
   assert.equal(msg.provider, 'gemini');
-  assert.equal(msg.text, 'GEMINI[gemini-3.5-flash]: كيف حالك');
+  assert.equal(msg.text, 'AGY[gemini-3.8-flash-medium]: كيف حالك');
 });
 
-test('settings from v0.2 (retired model names) are migrated', async () => {
+test('settings from older versions (retired models, Gemini CLI) are migrated', async () => {
   const dir = tempDir();
   fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ onboarded: true, routes: { quick: [{ provider: 'gemini', model: 'gemini-2.5-flash' }] }, voice: { model: 'gemini-2.5-flash', autoSend: false } }));
   const store = new Store(dir);
   assert.equal(store.getSettings().routes.quick[0].model, '@flash');
-  assert.equal(store.getSettings().voice.model, '@flash');
+  assert.equal(store.getSettings().voice.engine, 'whisper');
   assert.equal(store.getSettings().voice.autoSend, false);
   assert.equal(store.getSettings().onboarded, true);
 });
 
-test('voice: transcribes a recording through Gemini Flash and cleans the output', async () => {
-  const { orch, store } = await setup();
-  const dir = path.join(store.dir, 'voice'); fs.mkdirSync(dir, { recursive: true });
-  const wav = path.join(dir, 'rec-1.wav'); fs.writeFileSync(wav, Buffer.alloc(64));
-  const r = await orch.transcribe(wav);
-  assert.deepEqual(r, { ok: true, text: 'ابني لي صفحة هبوط لمطعمي' });
-  const call = callsOf('gemini')[0];
-  assert.equal(fs.realpathSync(call.cwd), fs.realpathSync(dir));
-  assert.ok(call.args.includes('gemini-3.5-flash'));
-  assert.ok(call.args.includes('plan'));
-  process.env.FAKE_TRANSCRIPT = '[silence]';
-  assert.deepEqual(await orch.transcribe(wav), { ok: true, text: '' });
-});
-
-test('signed-out Gemini is skipped instantly and voice reports auth', async () => {
-  const { orch, conv, store } = await setup();
-  const saved = process.env.GEMINI_API_KEY; delete process.env.GEMINI_API_KEY;
-  try {
-    if (fs.existsSync(path.join(require('os').homedir(), '.gemini', 'oauth_creds.json'))) return;
-    const { msg, events } = await send(orch, conv, 'كيف حالك');
-    assert.ok(events.some((e) => e.type === 'fallback' && e.provider === 'gemini' && e.kind === 'auth'));
-    assert.ok(!callsOf('gemini').length);
-    assert.equal(msg.provider, 'claude');
-    const wav = path.join(store.dir, 'x.wav'); fs.writeFileSync(wav, Buffer.alloc(8));
-    assert.equal((await orch.transcribe(wav)).kind, 'auth');
-  } finally { process.env.GEMINI_API_KEY = saved; }
-});
