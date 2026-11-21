@@ -47,6 +47,7 @@ jobs:
         run: |
           $env:MAJLIS_DATA_DIR = "$env:RUNNER_TEMP\majlis-voice"
           $env:MAJLIS_SELFTEST_OUT = "$env:RUNNER_TEMP\ar.json"
+          $env:MAJLIS_ASR_LANG = 'ar'
           npx electron . "--voice-selftest=$PWD\test\fixtures\audio\ar-sample.wav"
           $r = Get-Content $env:MAJLIS_SELFTEST_OUT -Raw -Encoding utf8 | ConvertFrom-Json
           Write-Host "Arabic result:" ($r | ConvertTo-Json -Compress)
