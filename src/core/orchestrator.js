@@ -671,7 +671,8 @@ class Orchestrator {
           'Plan:', ...steps.map((x, k) => `${k + 1}. ${x.title}`),
           `Now do ONLY step ${i + 1} of ${steps.length}: ${steps[i].title} — ${steps[i].detail}`,
           'Work directly in the current folder: create and edit real, complete files (no placeholders, no TODOs). Keep earlier steps\' work working. Do not ask questions.',
-          'When finished, reply with ONE short line saying what you did.',
+          'When finished, reply with ONE short line saying what you did, written in the same language as the request.',
+          'You cannot run node, npx, python or a browser here (commands are not approved), so do not try; write the code carefully instead. Majlis checks syntax and links itself afterwards.',
         ].join('\n'), ro(buildAuto));
         if (!r.ok) { aiMsg.project.steps[i].status = 'failed'; send({ type: 'project-step', index: i, status: 'failed', summary: r.failure && r.failure.message || '' }); throw Object.assign(new Error('step_failed'), { failure: r.failure }); }
         builder = r.provider;
@@ -679,22 +680,22 @@ class Orchestrator {
         send({ type: 'project-step', index: i, status: 'done', summary: aiMsg.project.steps[i].summary, provider: r.provider });
       }
 
-      // 3 — check it really runs, fixing what fails (up to 2 rounds)
+      // 3 — Majlis' own static check first (links, syntax, JSON), then a model pass that fixes what it found
       phase('verify', 'running');
-      let verified = false, verifyNote = '';
-      for (let round = 0; round < 2 && !verified; round++) {
+      const { verifyStatic } = require('./workspace');
+      let verified = false, verifyNote = '', stat = verifyStatic(cwd);
+      send({ type: 'activity', text: `Majlis check: ${stat.checked} files, ${stat.problems.length} problems` });
+      for (let round = 0; round < 2 && stat.problems.length; round++) {
         const v = await this.runWithFallback(order(), [
-          'The project in this folder must satisfy this request:', '<<<', text, '>>>',
-          'Prove that it really works: run its checks' + (plan && plan.verify ? ` (suggested: ${String(plan.verify).slice(0, 200)})` : '') + ' — tests, build, or a quick run/lint. For a static website make sure every linked file exists and the JavaScript has no errors.',
-          'If something fails, FIX it now and check again.',
-          'The first line of your reply must be exactly VERIFIED if everything passes, otherwise ISSUES: followed by a short list of what is still broken.',
-        ].join('\n'), ro(buildAuto));
-        if (!v.ok) { verifyNote = v.failure && v.failure.message || ''; break; }
+          'Majlis automatically checked the project in this folder and found these concrete problems. Fix every one now by editing the files (you cannot run commands). Reply with one short line.',
+          '', ...stat.problems.map((x) => '- ' + x), '', 'Original request:', text].join('\n'), ro(buildAuto));
+        if (!v.ok) break;
         builder = v.provider;
-        verified = /^\s*VERIFIED/i.test(v.text);
-        verifyNote = v.text.replace(/^\s*(VERIFIED|ISSUES:?)/i, '').trim().slice(0, 400);
-        send({ type: 'project-phase', phase: 'verify', status: verified ? 'ok' : 'issues', round });
+        stat = verifyStatic(cwd);
+        send({ type: 'project-phase', phase: 'verify', status: stat.problems.length ? 'issues' : 'ok', round });
       }
+      verified = stat.problems.length === 0;
+      verifyNote = verified ? `${stat.checked} ${arabic ? 'ملف: كل الروابط موجودة والأكواد سليمة' : 'files: all links resolve and all code parses'}` : stat.problems.slice(0, 3).join(' · ');
       aiMsg.project.verified = verified;
 
       // 4 — an independent review by a different model (read-only), then one fix round

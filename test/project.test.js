@@ -108,3 +108,19 @@ test('folder trigger runs the task once the changed files settle', async () => {
   assert.match(conv.messages[0].text, /report\.txt/);
   await sch.tick(); assert.equal(done.length, 1, 'does not rerun without new changes');
 });
+
+test('static verify catches missing links, bad JS and bad JSON; clean project passes', () => {
+  const dir = tempDir();
+  fs.writeFileSync(path.join(dir, 'index.html'), '<link href="css/a.css"><script src="js/app.js"></script><img src="https://x.y/z.png"><a href="#top">t</a>');
+  fs.mkdirSync(path.join(dir, 'js'));
+  fs.writeFileSync(path.join(dir, 'js', 'app.js'), 'const a = ;');
+  fs.writeFileSync(path.join(dir, 'd.json'), '{bad');
+  const r = ws.verifyStatic(dir);
+  assert.equal(r.problems.length, 3);
+  assert.ok(r.problems.some((p) => /css\/a\.css/.test(p)) && r.problems.some((p) => /syntax/.test(p)) && r.problems.some((p) => /JSON/.test(p)));
+  fs.mkdirSync(path.join(dir, 'css'));
+  fs.writeFileSync(path.join(dir, 'css', 'a.css'), 'a{}');
+  fs.writeFileSync(path.join(dir, 'js', 'app.js'), 'import {x} from "./m.js"; export const a = 1;');
+  fs.writeFileSync(path.join(dir, 'd.json'), '{"ok":1}');
+  assert.deepEqual(ws.verifyStatic(dir).problems, []);
+});

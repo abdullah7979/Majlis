@@ -54,6 +54,37 @@ class Watcher {
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; this.dir = null; }
 }
 
+/**
+ * Majlis' own check, no model and no shell needed: every local file an HTML page links to exists,
+ * every .js parses, every .json is valid. Returns a list of concrete problems (empty = clean).
+ */
+function verifyStatic(dir) {
+  const vm = require('vm');
+  const files = listFiles(dir, { max: 800 });
+  const problems = [];
+  const exists = (rel) => { try { return fs.existsSync(path.join(dir, rel)); } catch (_) { return false; } };
+  for (const f of files) {
+    const full = path.join(dir, f.path);
+    let txt = '';
+    if (/\.(html?|js|mjs|json|css)$/i.test(f.path) && f.size < 2e6) { try { txt = fs.readFileSync(full, 'utf8'); } catch (_) { continue; } } else continue;
+    if (/\.html?$/i.test(f.path)) {
+      for (const m of txt.matchAll(/(?:src|href)\s*=\s*["']([^"'#?]+)(?:[?#][^"']*)?["']/gi)) {
+        const u = m[1].trim();
+        if (!u || /^(https?:|\/\/|data:|mailto:|tel:|javascript:|blob:|sms:|whatsapp:)/i.test(u)) continue;
+        const rel = path.posix.normalize(path.posix.join(path.posix.dirname(f.path), u.replace(/^\//, '')));
+        if (!exists(rel) && !(u.endsWith('/') && exists(rel + '/index.html'))) problems.push(`${f.path}: links to missing file "${u}"`);
+      }
+    } else if (/\.json$/i.test(f.path)) {
+      try { JSON.parse(txt); } catch (e) { problems.push(`${f.path}: invalid JSON (${e.message.slice(0, 60)})`); }
+    } else if (/\.m?js$/i.test(f.path)) {
+      const isModule = /\.mjs$/i.test(f.path) || /^\s*(import|export)\s/m.test(txt);
+      try { new vm.Script(isModule ? txt.replace(/^\s*import\s[^;]*;?/gm, '').replace(/^\s*export\s+(default\s+)?/gm, '') : txt, { filename: f.path }); }
+      catch (e) { problems.push(`${f.path}: JavaScript syntax error (${String(e.message).slice(0, 80)})`); }
+    }
+  }
+  return { checked: files.length, problems: problems.slice(0, 20) };
+}
+
 const MEMORY_FILE = 'MAJLIS.md';
 function readProjectMemory(dir) {
   if (!dir) return '';
@@ -80,4 +111,4 @@ function initProjectMemory(dir) {
   return f;
 }
 
-module.exports = { listFiles, findEntry, snapshot, Watcher, readProjectMemory, initProjectMemory, MEMORY_FILE };
+module.exports = { verifyStatic, listFiles, findEntry, snapshot, Watcher, readProjectMemory, initProjectMemory, MEMORY_FILE };
