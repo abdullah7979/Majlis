@@ -299,6 +299,11 @@ function updateAiEl(el, m) {
     const foot = h('div', { class: 'msg-foot' },
       h('button', { onclick: (e) => { navigator.clipboard.writeText(m.text); e.target.textContent = t('copied'); setTimeout(() => (e.target.textContent = t('copy')), 1400); } }, t('copy')),
       h('span', {}, '·'), h('span', {}, fmtTime(m.ts)));
+    if (m.category === 'prompt') {
+      // A written prompt is usually in a code block: save that part (or the whole answer) to the library.
+      const block = /```[^\n]*\n([\s\S]*?)```/.exec(m.text || '');
+      foot.append(h('span', {}, '·'), h('button', { onclick: () => saveAsPrompt((block ? block[1] : m.text).trim()) }, `📚 ${t('save_as_prompt')}`));
+    }
     if (m.category && m.category !== 'manual' && m.category !== 'council') {
       foot.append(h('span', { class: 'grow' }), h('span', {}, m.feedback ? t('thanks') : t('was_good')));
       for (const [sym, good] of [['👍', true], ['👎', false]]) {
@@ -519,14 +524,14 @@ function closeOverlay() { $('#overlay').classList.add('hidden'); $('#overlay').i
 async function openSettings(tab = 'providers') {
   S.settings = await api.settings.get();
   const pane = h('div', { class: 'pane' });
-  const tabs = ['providers', 'routing', 'general', 'about'];
+  const tabs = ['providers', 'routing', 'prompts', 'autos', 'api', 'general', 'about'];
   const nav = h('nav', {}, h('h3', {}, t('settings')),
     tabs.map((k) => h('button', { 'data-tab': k, onclick: () => show(k) }, t(`tab_${k}`))),
     h('button', { class: 'x', onclick: closeOverlay }, '✕'));
   function show(k) {
     $$('button[data-tab]', nav).forEach((b) => b.classList.toggle('on', b.dataset.tab === k));
     pane.innerHTML = '';
-    ({ providers: paneProviders, routing: paneRouting, general: paneGeneral, about: paneAbout })[k](pane);
+    ({ providers: paneProviders, routing: paneRouting, prompts: panePrompts, autos: paneAutos, api: paneApi, general: paneGeneral, about: paneAbout })[k](pane);
   }
   overlay(h('div', { class: 'modal' }, nav, pane));
   show(tab);
@@ -749,6 +754,188 @@ function paneAbout(pane) {
     h('p', { class: 'help' }, t('ob_note')));
 }
 
+// ------------------------------------------------------------------ prompts (✨ improve + "/" library)
+async function improveCurrent() {
+  const input = $('#input'); const text = input.value.trim();
+  if (!text) { input.focus(); return; }
+  const btn = $('#improveBtn'); if (btn.disabled) return;
+  btn.disabled = true; btn.classList.add('busy'); toast(t('improving'));
+  try {
+    const r = await api.chat.improve(text);
+    if (!r || !r.ok || !r.text) { toast(t('improve_failed')); return; }
+    input.focus(); input.select();
+    // insertText keeps Ctrl+Z working, so the original request is one undo away.
+    if (!document.execCommand('insertText', false, r.text)) input.value = r.text;
+    autoGrow(); toast(t('improved'));
+  } finally { btn.disabled = false; btn.classList.remove('busy'); }
+}
+
+const PM = { open: false, items: [], index: 0, fromSlash: false };
+function promptList() { return (S.settings.prompts || []).filter((p) => p && p.text); }
+function openPromptMenu({ fromSlash = false } = {}) {
+  PM.open = true; PM.fromSlash = fromSlash; PM.index = 0; renderPromptMenu();
+}
+function closePromptMenu() { PM.open = false; $('#promptMenu').classList.add('hidden'); }
+function renderPromptMenu() {
+  const menu = $('#promptMenu'); const input = $('#input');
+  const q = PM.fromSlash ? input.value.slice(1).trim().toLowerCase() : '';
+  PM.items = promptList().filter((p) => !q || p.name.toLowerCase().includes(q) || p.text.toLowerCase().includes(q));
+  if (PM.index >= PM.items.length) PM.index = 0;
+  menu.innerHTML = '';
+  menu.append(h('div', { class: 'pm-head' }, h('span', {}, `📚 ${t('prompts')}`), h('button', { class: 'link', onclick: () => { closePromptMenu(); openSettings('prompts'); } }, '⚙')));
+  if (!PM.items.length) menu.append(h('div', { class: 'pm-empty' }, t('no_match')));
+  PM.items.forEach((p, i) => menu.append(h('button', { class: `pm-item${i === PM.index ? ' on' : ''}`, onmousedown: (e) => { e.preventDefault(); applyPrompt(p); } },
+    h('b', {}, p.name), h('span', { dir: 'auto' }, p.text.replace(/\s+/g, ' ').slice(0, 90)))));
+  menu.classList.remove('hidden');
+}
+function applyPrompt(p) {
+  const input = $('#input');
+  const existing = PM.fromSlash ? '' : input.value.trim();
+  let text = p.text;
+  if (text.includes('{text}')) text = text.replace('{text}', existing);
+  else if (existing) text = text.replace(/\s*$/, '\n\n') + existing;
+  input.value = text;
+  closePromptMenu(); autoGrow(); input.focus();
+  const at = p.text.includes('{text}') && !existing ? p.text.indexOf('{text}') : text.length;
+  input.setSelectionRange(at, at);
+}
+function promptMenuKey(e) {
+  if (!PM.open) return false;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const n = PM.items.length || 1; PM.index = (PM.index + (e.key === 'ArrowDown' ? 1 : n - 1)) % n; renderPromptMenu(); return true; }
+  if ((e.key === 'Enter' || e.key === 'Tab') && PM.items.length) { e.preventDefault(); applyPrompt(PM.items[PM.index]); return true; }
+  if (e.key === 'Escape') { e.preventDefault(); closePromptMenu(); return true; }
+  return false;
+}
+async function saveAsPrompt(text) {
+  const prompts = (S.settings.prompts || []).slice();
+  prompts.push({ id: 'p' + Date.now().toString(36), name: text.replace(/\s+/g, ' ').slice(0, 28), text });
+  await saveSettings({ prompts }); toast(t('saved'));
+}
+
+function panePrompts(pane) {
+  const list = h('div', {});
+  const save = (prompts) => saveSettings({ prompts });
+  const draw = () => {
+    list.innerHTML = '';
+    const prompts = (S.settings.prompts || []).slice();
+    prompts.forEach((p, i) => {
+      const name = h('input', { type: 'text', value: p.name, dir: 'auto', placeholder: t('prompt_name') });
+      const text = h('textarea', { class: 'memory', rows: 3, dir: 'auto', placeholder: t('prompt_text') }); text.value = p.text;
+      const commit = () => { prompts[i] = { ...p, name: name.value.trim() || t('prompts'), text: text.value }; save(prompts); };
+      name.onchange = commit; text.onchange = commit;
+      list.append(h('div', { class: 'card prompt-card' }, h('div', { class: 'row' }, name,
+        h('button', { class: 'btn danger', onclick: async () => { prompts.splice(i, 1); await save(prompts); draw(); } }, t('delete'))), text));
+    });
+  };
+  pane.append(h('h2', {}, t('tab_prompts')), h('p', { class: 'help' }, t('prompts_help')), list,
+    h('button', { class: 'btn primary', onclick: async () => {
+      const prompts = (S.settings.prompts || []).concat([{ id: 'p' + Date.now().toString(36), name: '', text: '' }]);
+      S.settings.prompts = prompts; draw(); const last = $$('.prompt-card input', list).pop(); if (last) last.focus();
+    } }, t('add_prompt')));
+  draw();
+}
+
+// ------------------------------------------------------------------ Connect (API)
+async function paneApi(pane) {
+  const st = await api.api.status();
+  const a = st.settings || {};
+  const base = () => `http://${a.allowLan ? '<IP>' : '127.0.0.1'}:${st.port || a.port || 4891}/v1`;
+  const copyBtn = (get) => h('button', { class: 'btn', onclick: async () => { await navigator.clipboard.writeText(get()); toast(t('copied')); } }, t('copy'));
+  let key = st.key;
+  const keyBox = h('code', { class: 'secret', dir: 'ltr' }, key.slice(0, 7) + '••••••••••••' + key.slice(-4));
+  const status = h('span', { class: `state ${st.running ? 'ok' : 'warn'}` }, st.running ? `${t('api_running')} · ${st.requests} ${t('api_requests')}` : t('api_stopped'));
+  const apply = async (patch) => {
+    await saveSettings({ api: patch });
+    const r = await api.api.apply();
+    if (!r.ok) toast(r.error === 'port_in_use' ? t('api_port_in_use') : `✖ ${r.error}`);
+    pane.innerHTML = ''; paneApi(pane);
+  };
+  const autonomy = h('select', { onchange: (e) => saveSettings({ api: { autonomy: e.target.value } }) },
+    ['safe', 'edit', 'full'].map((k) => h('option', { value: k }, t(`autonomy_${k}`))));
+  autonomy.value = a.autonomy || 'safe';
+  const curl = () => `curl ${base()}/chat/completions \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d "{\\"model\\":\\"majlis-auto\\",\\"messages\\":[{\\"role\\":\\"user\\",\\"content\\":\\"لخص لي هذا النص\\"}]}"`;
+  const py = () => `from openai import OpenAI\nclient = OpenAI(base_url="${base()}", api_key="${key}")\nr = client.chat.completions.create(\n    model="majlis-auto",   # or majlis-council, claude:opus, codex:gpt-6-luna ...\n    messages=[{"role": "user", "content": "اكتب لي رد على هذا الإيميل"}],\n)\nprint(r.choices[0].message.content)`;
+  const n8n = () => `n8n → OpenAI Chat Model (or "OpenAI" node)\n  Credentials → API Key: ${key}\n               Base URL: ${base()}\n  Model: majlis-auto`;
+  const ex = (title, get) => h('details', { class: 'example' }, h('summary', {}, title), h('pre', { class: 'log', dir: 'ltr' }, get()), copyBtn(get));
+  pane.append(h('h2', {}, t('api_title')), h('p', { class: 'help' }, t('api_help')),
+    h('div', { class: 'card' },
+      field(t('api_enable'), h('div', { style: 'display:flex;gap:10px;align-items:center' }, status, toggle(!!a.enabled, (v) => apply({ enabled: v })))),
+      field(t('api_address'), h('div', { style: 'display:flex;gap:8px;align-items:center' }, h('code', { dir: 'ltr' }, base()), copyBtn(base))),
+      field(t('api_key'), h('div', { style: 'display:flex;gap:8px;align-items:center' }, keyBox, copyBtn(() => key),
+        h('button', { class: 'btn', onclick: async () => { if (!confirm(t('regen_confirm'))) return; key = await api.api.regenerateKey(); pane.innerHTML = ''; paneApi(pane); } }, t('regen')))),
+      field(t('api_port'), h('input', { type: 'number', min: 1024, max: 65535, value: a.port || 4891, onchange: (e) => apply({ port: Math.max(1024, Math.min(65535, Number(e.target.value) || 4891)) }) })),
+      field(t('api_lan'), toggle(!!a.allowLan, (v) => apply({ allowLan: v })), t('api_lan_help')),
+      field(t('api_autonomy'), autonomy),
+      field(t('api_models'), h('code', { dir: 'ltr' }, 'majlis-auto · majlis-council · claude:opus'), t('api_models_help'))),
+    h('h2', { style: 'margin-top:22px' }, t('api_examples')),
+    h('div', { class: 'card' }, ex('Python (openai)', py), ex('curl', curl), ex('n8n / Make / Zapier', n8n)));
+}
+
+// ------------------------------------------------------------------ Automations
+async function paneAutos(pane) {
+  let tasks = await api.auto.list();
+  const dayNames = t('days').split(',');
+  const fmt = (ms) => (ms ? new Date(ms).toLocaleString(S.lang === 'ar' ? 'ar-SA-u-nu-latn' : undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', day: 'numeric', month: 'short' }) : '—');
+  const list = h('div', {});
+  const editor = (task, onDone) => {
+    const tk = JSON.parse(JSON.stringify(task));
+    tk.schedule = tk.schedule || { type: 'daily', time: '08:00', days: [0, 1, 2, 3, 4], every: 6 };
+    const name = h('input', { type: 'text', dir: 'auto', value: tk.name || '', placeholder: t('auto_ex1') });
+    const prompt = h('textarea', { class: 'memory', rows: 4, dir: 'auto', placeholder: t('auto_ex1_p') }); prompt.value = tk.prompt || '';
+    const type = h('select', {}, ['daily', 'weekly', 'hours'].map((k) => h('option', { value: k }, t(`auto_${k}`)))); type.value = tk.schedule.type;
+    const time = h('input', { type: 'time', value: tk.schedule.time || '08:00' });
+    const every = h('input', { type: 'number', min: 1, max: 168, value: tk.schedule.every || 6, style: 'width:70px' });
+    const days = h('div', { class: 'days' }, dayNames.map((d, i) => h('label', {}, h('input', { type: 'checkbox', checked: (tk.schedule.days || []).includes(i), 'data-day': i }), d)));
+    const mode = h('select', {}, h('option', { value: 'auto' }, t('auto_mode_auto')), h('option', { value: 'council' }, t('auto_mode_council'))); mode.value = tk.mode || 'auto';
+    const when = h('div', { class: 'when' });
+    const drawWhen = () => {
+      when.innerHTML = '';
+      if (type.value === 'hours') when.append(h('span', {}, t('auto_every')), every, h('span', {}, t('auto_hours_unit')));
+      else { if (type.value === 'weekly') when.append(days); when.append(h('span', {}, t('auto_at')), time); }
+    };
+    type.onchange = drawWhen; drawWhen();
+    const box = h('div', { class: 'card auto-edit' },
+      field(t('auto_name'), name), h('div', { class: 'field', style: 'display:block' }, h('label', {}, t('auto_prompt')), prompt),
+      field(t('auto_when'), h('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap' }, type, when)),
+      field(t('auto_mode'), mode),
+      h('div', { class: 'row', style: 'justify-content:flex-end;gap:8px' },
+        h('button', { class: 'btn', onclick: onDone }, '✕'),
+        h('button', { class: 'btn primary', onclick: async () => {
+          if (!prompt.value.trim()) { prompt.focus(); return; }
+          tasks = await api.auto.save({ ...tk, name: name.value.trim(), prompt: prompt.value.trim(), mode: mode.value,
+            schedule: { type: type.value, time: time.value || '08:00', every: Number(every.value) || 6, days: $$('input[data-day]', days).filter((c) => c.checked).map((c) => +c.dataset.day) } });
+          onDone();
+        } }, t('save'))));
+    return box;
+  };
+  const draw = () => {
+    list.innerHTML = '';
+    if (!tasks.length) list.append(h('p', { class: 'help' }, t('auto_none')));
+    for (const tk of tasks) {
+      const s = tk.schedule || {};
+      const whenText = s.type === 'hours' ? `${t('auto_every')} ${s.every} ${t('auto_hours_unit')}`
+        : `${s.type === 'weekly' ? (s.days || []).map((d) => dayNames[d]).join('، ') : t('auto_daily')} · ${s.time}`;
+      const last = tk.lastRun ? `${fmt(tk.lastRun)} ${tk.lastStatus === 'done' ? '✓' : tk.lastStatus === 'running' ? '…' : tk.lastStatus ? '✖' : ''}` : '—';
+      const card = h('div', { class: 'card auto-card' },
+        h('div', { class: 'row' }, h('div', { class: 'grow' }, h('div', { class: 'name' }, `⏰ ${tk.name}`, tk.mode === 'council' ? h('span', { class: 'vendor' }, '🏛') : null),
+          h('div', { class: 'sub' }, h('span', {}, whenText), h('span', {}, `${t('auto_next')}: ${fmt(tk.nextRun)}`), h('span', {}, `${t('auto_last')}: ${last}`))),
+          toggle(tk.enabled, async (v) => { tasks = await api.auto.save({ ...tk, enabled: v }); draw(); })),
+        h('div', { class: 'sub prompt-preview', dir: 'auto' }, tk.prompt.slice(0, 160)),
+        h('div', { class: 'row', style: 'gap:8px;justify-content:flex-end' },
+          tk.conversationId ? h('button', { class: 'btn', onclick: () => { closeOverlay(); openConversation(tk.conversationId); } }, t('auto_open')) : null,
+          h('button', { class: 'btn', onclick: () => { card.replaceWith(editor(tk, draw)); } }, '✎'),
+          h('button', { class: 'btn danger', onclick: async () => { tasks = await api.auto.remove(tk.id); draw(); } }, t('delete')),
+          h('button', { class: 'btn primary', disabled: tk.running, onclick: async (e) => { e.target.disabled = true; e.target.textContent = t('auto_running'); await api.auto.run(tk.id); setTimeout(async () => { tasks = await api.auto.list(); draw(); refreshConvs(); }, 1500); } }, tk.running ? t('auto_running') : t('auto_run_now'))));
+      list.append(card);
+    }
+  };
+  const addBtn = h('button', { class: 'btn primary', onclick: () => { addBtn.before(editor({ name: '', prompt: '', enabled: true, mode: 'auto' }, () => { pane.innerHTML = ''; paneAutos(pane); })); } }, t('auto_new'));
+  pane.append(h('h2', {}, t('autos_title')), h('p', { class: 'help' }, t('autos_help')), list, addBtn);
+  if (!S.settings.closeToTray) pane.append(h('p', { class: 'help', style: 'margin-top:14px' }, t('auto_tray_note')));
+  draw();
+  const off = api.auto.onChanged(async () => { if (!pane.isConnected) return off(); tasks = await api.auto.list(); draw(); });
+}
+
 // ------------------------------------------------------------------ onboarding
 async function showOnboarding() {
   const node = await api.system.checkNode();
@@ -811,14 +998,26 @@ async function boot() {
   $('#convTitle').onkeydown = (e) => { if (e.key === 'Enter') e.target.blur(); };
   $$('[data-ex]').forEach((b) => { b.onclick = () => { $('#input').value = t(b.dataset.ex); autoGrow(); $('#input').focus(); }; });
   const input = $('#input');
-  input.oninput = autoGrow;
-  input.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendCurrent(); } };
+  input.oninput = () => {
+    autoGrow();
+    if (/^\/[^\n]{0,40}$/.test(input.value)) openPromptMenu({ fromSlash: true });
+    else if (PM.open && PM.fromSlash) closePromptMenu();
+  };
+  input.onblur = () => setTimeout(closePromptMenu, 150);
+  input.onkeydown = (e) => {
+    if (promptMenuKey(e)) return;
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendCurrent(); }
+  };
+  $('#improveBtn').onclick = improveCurrent;
+  $('#promptsBtn').onclick = () => (PM.open ? closePromptMenu() : openPromptMenu());
+  $('#openAutos').onclick = () => openSettings('autos');
   $('#sendBtn').onclick = sendCurrent;
   $('#attachBtn').onclick = async () => { const f = await api.dialog.pickFiles(); S.pendingFiles.push(...f); renderAttachments(); };
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') { e.preventDefault(); showWelcome(); }
     if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); openSettings(); }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'm') { e.preventDefault(); listen(); }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'i') { e.preventDefault(); improveCurrent(); }
     if (e.key === 'Escape' && (V.mode || V.state !== 'idle')) stopVoice();
     if (e.key === 'Escape' && !$('#overlay').classList.contains('hidden') && S.settings.onboarded) closeOverlay();
   });

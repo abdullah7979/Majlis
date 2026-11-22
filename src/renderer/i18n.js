@@ -136,3 +136,43 @@ window.I18N = {
     installed_not_found: 'npm خلّص التثبيت، بس الأداة للحين ما انلقت. أعد تشغيل مجلس، ولو استمرت افتح التفاصيل تحت.',
   },
 };
+
+// v0.6: prompts, API, automations
+Object.assign(window.I18N.en, {
+  cat_prompt: 'Prompt writing', improve: 'Improve', improve_title: 'Turn your rough request into a professional prompt (Ctrl+I)', improving: 'Improving your request…',
+  improved: 'Request improved. Edit it or press Enter', improve_failed: 'Could not improve it right now',
+  prompts: 'Prompts', prompts_title: 'Your prompt library (type / in the box)', tab_prompts: 'Prompts', prompts_help: 'Saved prompts you reuse. Type / in the message box to insert one. Use {text} where your text should go.',
+  prompt_name: 'Name', prompt_text: 'Prompt', add_prompt: '+ New prompt', save: 'Save', delete: 'Delete', no_match: 'Nothing matches',
+  save_as_prompt: 'Save as prompt', saved: 'Saved ✓',
+  tab_api: 'Connect (API)', api_title: 'Connect other systems to Majlis', api_help: 'Majlis runs a local API in OpenAI format. Any tool that speaks to OpenAI (n8n, Make, Zapier agents, Python, Excel/VBA, IDE plugins) can send work here, and Majlis gives it to the strongest model on your subscriptions — no paid API.',
+  api_enable: 'Turn on the API', api_address: 'Address', api_key: 'Key', regen: 'New key', regen_confirm: 'Systems using the old key will stop working. Continue?',
+  api_port: 'Port', api_lan: 'Allow other devices on my network', api_lan_help: 'Off = only this PC can connect (safer).', api_autonomy: 'Allowed for API requests',
+  api_models: 'Model names', api_models_help: 'majlis-auto = Majlis chooses · majlis-council = the three together · or a specific one like claude:opus', api_examples: 'Examples',
+  api_running: 'Running', api_stopped: 'Off', api_port_in_use: 'This port is in use, choose another one', api_requests: 'requests',
+  autos: 'Automations', autos_title: 'Tasks Majlis does on its own, on a schedule', tab_autos: 'Automations',
+  autos_help: 'Write the task once and pick when. Majlis runs it on time (while it is open or in the tray), keeps the results in their own conversation and notifies you.',
+  auto_new: '+ New task', auto_name: 'Task name', auto_prompt: 'What should it do?', auto_when: 'When', auto_daily: 'Every day', auto_weekly: 'Chosen days', auto_hours: 'Every few hours',
+  auto_at: 'at', auto_every: 'every', auto_hours_unit: 'hours', auto_mode: 'Who answers', auto_mode_auto: 'Majlis chooses', auto_mode_council: 'Council (all three)',
+  auto_run_now: 'Run now', auto_next: 'Next run', auto_last: 'Last run', auto_open: 'Results', auto_none: 'No tasks yet. Ideas: a morning brief, a daily summary of a folder, a weekly report.',
+  auto_running: 'Running…', auto_on: 'On', auto_tray_note: 'Tip: turn on "close to tray" and "start with Windows" so tasks run even when the window is closed.',
+  days: 'Sun,Mon,Tue,Wed,Thu,Fri,Sat', auto_ex1: 'Morning brief', auto_ex1_p: 'Give me a short brief of the most important tech and AI news today in 7 points, with sources.',
+});
+Object.assign(window.I18N.ar, {
+  cat_prompt: 'كتابة برومبت', improve: 'حسّن', improve_title: 'يحوّل طلبك العادي لبرومبت احترافي قبل ما ترسله (Ctrl+I)', improving: 'أحسّن طلبك…',
+  improved: 'تم تحسين الطلب. عدّله لو تبي أو اضغط Enter', improve_failed: 'ما قدرت أحسّنه الحين',
+  prompts: 'الأوامر', prompts_title: 'مكتبة أوامرك (اكتب / في خانة الرسالة)', tab_prompts: 'الأوامر', prompts_help: 'أوامر جاهزة تستخدمها كثير. اكتب / في خانة الرسالة وتطلع لك. حط {text} مكان النص اللي بتضيفه.',
+  prompt_name: 'الاسم', prompt_text: 'الأمر', add_prompt: '+ أمر جديد', save: 'حفظ', delete: 'حذف', no_match: 'ما فيه شيء مطابق',
+  save_as_prompt: 'احفظه كأمر', saved: 'انحفظ ✓',
+  tab_api: 'الربط (API)', api_title: 'اربط أنظمتك الثانية بمجلس', api_help: 'مجلس يشغّل API محلي بصيغة OpenAI. أي أداة تتكلم مع OpenAI (n8n، Make، Zapier، بايثون، إكسل، إضافات المبرمجين) تقدر ترسل له شغل، ومجلس يعطيه أقوى نموذج من اشتراكاتك — بدون API مدفوع.',
+  api_enable: 'شغّل الـ API', api_address: 'العنوان', api_key: 'المفتاح', regen: 'مفتاح جديد', regen_confirm: 'الأنظمة اللي تستخدم المفتاح القديم بتوقف. أكمل؟',
+  api_port: 'المنفذ', api_lan: 'اسمح لأجهزة ثانية في شبكتي', api_lan_help: 'طافي = هذا الجهاز بس يقدر يتصل (أأمن).', api_autonomy: 'المسموح لطلبات الـ API',
+  api_models: 'أسماء النماذج', api_models_help: 'majlis-auto = مجلس يختار · majlis-council = الثلاثة مع بعض · أو نموذج محدد مثل claude:opus', api_examples: 'أمثلة',
+  api_running: 'شغّال', api_stopped: 'طافي', api_port_in_use: 'المنفذ هذا مستخدم، اختر غيره', api_requests: 'طلب',
+  autos: 'الأتمتة', autos_title: 'مهام يسويها مجلس لحاله بمواعيد', tab_autos: 'الأتمتة',
+  autos_help: 'اكتب المهمة مرة وحدة واختر متى. مجلس ينفذها في وقتها (وهو مفتوح أو في شريط المهام)، ويحفظ النتائج في محادثة خاصة فيها ويعلمك بإشعار.',
+  auto_new: '+ مهمة جديدة', auto_name: 'اسم المهمة', auto_prompt: 'وش يسوي؟', auto_when: 'متى', auto_daily: 'كل يوم', auto_weekly: 'أيام محددة', auto_hours: 'كل كم ساعة',
+  auto_at: 'الساعة', auto_every: 'كل', auto_hours_unit: 'ساعات', auto_mode: 'مين يجاوب', auto_mode_auto: 'مجلس يختار', auto_mode_council: 'الشورى (الثلاثة)',
+  auto_run_now: 'شغّلها الحين', auto_next: 'التشغيل الجاي', auto_last: 'آخر تشغيل', auto_open: 'النتائج', auto_none: 'ما فيه مهام للحين. أفكار: ملخص الصباح، تقرير يومي، مراجعة أسبوعية.',
+  auto_running: 'تشتغل…', auto_on: 'مفعّلة', auto_tray_note: 'نصيحة: فعّل «إخفاء في شريط المهام» و«التشغيل مع ويندوز» عشان المهام تشتغل حتى لو قفلت النافذة.',
+  days: 'أحد,اثنين,ثلاثاء,أربعاء,خميس,جمعة,سبت', auto_ex1: 'ملخص الصباح', auto_ex1_p: 'أعطني ملخص قصير لأهم أخبار التقنية والذكاء الاصطناعي اليوم في 7 نقاط مع المصادر.',
+});

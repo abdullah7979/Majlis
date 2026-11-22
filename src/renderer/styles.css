@@ -288,3 +288,30 @@ details.council .mhead .avatar { width: 22px; height: 22px; font-size: 10px; bor
 .ucount { text-align: center; color: var(--text-2); }
 .ustate { font-size: 12px; } .ustate.ok { color: var(--ok); } .ustate.warn { color: var(--warn); } .ustate.bad { color: var(--bad); }
 textarea.memory { width: 100%; resize: vertical; background: var(--bg); border: 1px solid var(--line-2); border-radius: 10px; padding: 10px 12px; color: var(--text); font: inherit; outline: none; }
+
+/* v0.6 — prompt library, API, automations */
+.composer { position: relative; }
+.prompt-menu { position: absolute; bottom: calc(100% + 8px); inset-inline: 0; max-height: 320px; overflow: auto; background: var(--panel); border: 1px solid var(--line-2); border-radius: 14px; box-shadow: 0 14px 40px rgba(0,0,0,.45); padding: 6px; z-index: 20; }
+.pm-head { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; color: var(--muted); font-size: 12px; }
+.pm-item { display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: start; background: none; border: 0; border-radius: 9px; padding: 8px 10px; color: inherit; cursor: pointer; }
+.pm-item span { color: var(--muted); font-size: 12px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pm-item.on, .pm-item:hover { background: var(--bg); }
+.pm-empty { padding: 10px; color: var(--muted); }
+#improveBtn.busy .ico { display: inline-block; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.btn.danger { color: var(--bad); }
+.row { display: flex; align-items: center; gap: 10px; }
+.row .grow, .grow { flex: 1; min-width: 0; }
+.prompt-card .row input { flex: 1; }
+.prompt-card textarea { margin-top: 8px; width: 100%; }
+.auto-card .name { font-weight: 600; display: flex; gap: 8px; align-items: center; }
+.auto-card .sub { display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin-top: 4px; }
+.auto-card .prompt-preview { margin: 10px 0; padding: 8px 10px; background: var(--bg); border-radius: 9px; }
+.auto-edit textarea { width: 100%; margin-top: 8px; }
+.when { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.days { display: flex; gap: 6px; flex-wrap: wrap; }
+.days label { font-weight: 400; display: flex; gap: 4px; align-items: center; padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; }
+code.secret, .pane code { background: var(--bg); padding: 4px 8px; border-radius: 7px; font-size: 12px; }
+details.example { margin-bottom: 10px; }
+details.example summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
+details.example pre { white-space: pre-wrap; word-break: break-all; }

@@ -2,7 +2,7 @@
 
 // Task categories and the default route (ordered fallback chain) for each.
 // model '' means "the CLI's own default model".
-const CATEGORIES = ['code_heavy', 'code', 'image', 'research', 'writing', 'realtime', 'quick'];
+const CATEGORIES = ['code_heavy', 'code', 'prompt', 'image', 'research', 'writing', 'realtime', 'quick'];
 
 // '' = the CLI's own default model; '@fast' / '@flash' / '@best' are resolved from the live model list.
 // '' = the CLI's own default (newest) model; '@fast' / '@flash' / '@best' are resolved from the live model list.
@@ -11,6 +11,7 @@ const CATEGORIES = ['code_heavy', 'code', 'image', 'research', 'writing', 'realt
 const DEFAULT_ROUTES = {
   code_heavy: [{ provider: 'claude', model: 'opus' }, { provider: 'codex', model: '' }, { provider: 'gemini', model: '@best' }],
   code: [{ provider: 'claude', model: 'sonnet' }, { provider: 'codex', model: '' }, { provider: 'gemini', model: '@best' }],
+  prompt: [{ provider: 'claude', model: 'opus' }, { provider: 'codex', model: '' }, { provider: 'gemini', model: '@best' }],
   image: [{ provider: 'gemini', model: '' }, { provider: 'codex', model: '' }],
   research: [{ provider: 'gemini', model: '@best' }, { provider: 'claude', model: 'opus' }, { provider: 'codex', model: '' }],
   writing: [{ provider: 'claude', model: 'sonnet' }, { provider: 'gemini', model: '@best' }, { provider: 'codex', model: '' }],
@@ -21,7 +22,7 @@ const DEFAULT_ROUTES = {
 const COUNCIL_MEMBERS = [{ provider: 'claude', model: 'opus' }, { provider: 'codex', model: '' }, { provider: 'gemini', model: '@best' }];
 
 const DEFAULT_SETTINGS = {
-  schema: 5,
+  schema: 6,
   language: null, // null = follow system
   onboarded: false,
   smartRouting: true,
@@ -29,6 +30,16 @@ const DEFAULT_SETTINGS = {
   balance: true,     // share everyday work between subscriptions so none runs out early
   continuity: true,  // short follow-ups ('yes', 'continue', 'fix it') stay with the model doing the task
   memory: '',        // things the user wants every model to know (shown in Settings → About you)
+  prompts: [         // saved commands, inserted with "/" in the message box
+    { id: 'p1', name: 'لخّص', text: 'لخّص لي النص التالي في نقاط واضحة، وأبرز أهم ٣ أفكار:\n\n' },
+    { id: 'p2', name: 'اشرح كأني مبتدئ', text: 'اشرح لي الموضوع التالي كأني مبتدئ، بأمثلة من الحياة اليومية وبدون مصطلحات معقدة:\n\n' },
+    { id: 'p3', name: 'راجع الكود', text: 'راجع الكود التالي: اكتشف الأخطاء والثغرات الأمنية ومشاكل الأداء، واقترح نسخة محسّنة مع شرح مختصر لكل تغيير:\n\n' },
+    { id: 'p4', name: 'منشور تسويقي', text: 'اكتب منشور تسويقي جذاب لمنصة (X / إنستقرام / لينكدإن) عن التالي، بثلاث نسخ مختلفة الأسلوب، مع هاشتاقات مناسبة:\n\n' },
+    { id: 'p5', name: 'ترجم باحتراف', text: 'ترجم النص التالي ترجمة احترافية طبيعية (مو حرفية) مع الحفاظ على المعنى والنبرة:\n\n' },
+    { id: 'p6', name: 'خطة عمل', text: 'سوّ لي خطة عمل مرتبة بخطوات واضحة ومدة تقديرية لكل خطوة، والأدوات المطلوبة، للهدف التالي:\n\n' },
+  ],
+  api: { enabled: false, port: 4891, key: '', autonomy: 'safe', allowLan: false }, // local OpenAI-compatible API for other apps
+  automations: [],   // scheduled tasks (see scheduler.js)
   snapshots: true,   // record file changes in project folders so they can be undone
   historyTurns: 10,
   cooldownMinutes: 60,

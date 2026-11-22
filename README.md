@@ -96,3 +96,28 @@ test/          fake claude/codex/gemini CLIs + end-to-end engine tests
 Data (conversations, settings) lives in `%APPDATA%\Majlis\data` and never leaves your PC.
 
 MIT License.
+
+## Connect other systems (local API)
+
+Settings → **Connect (API)** → turn it on. Majlis then serves an OpenAI-compatible API on `http://127.0.0.1:4891/v1`
+(key shown in the same screen). Anything that talks to OpenAI can use your subscriptions through Majlis:
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="http://127.0.0.1:4891/v1", api_key="mj-…")
+r = client.chat.completions.create(model="majlis-auto", messages=[{"role": "user", "content": "Summarize this…"}])
+```
+
+Models: `majlis-auto` (Majlis picks), `majlis-council` (all three, merged), or a specific one such as `claude:opus`,
+`codex:gpt-6-luna`, `gemini:default`. Streaming (`"stream": true`) is supported. API requests are read-only by default.
+
+## Automations
+
+⏰ **Automations** in the sidebar: write a task once (a morning brief, a weekly report…), choose *every day at*,
+*chosen weekdays* or *every N hours*. Majlis runs it on time, keeps the results in the task's own conversation and
+shows a notification.
+
+## Prompts
+
+✨ **Improve** (Ctrl+I) rewrites a rough request into a strong prompt before sending. Type `/` in the message box for
+your prompt library (edit it in Settings → Prompts). Asking Majlis to *write a prompt* routes to the best prompt engineer.

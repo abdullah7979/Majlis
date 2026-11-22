@@ -202,7 +202,7 @@ class Orchestrator {
    * Build the prompt. With `since` (index into conv.messages) only the turns after that point are
    * included — used when resuming the provider's own session, which already remembers the rest.
    */
-  buildPrompt(conv, text, attachments, { voice = false, since = null, image = false } = {}) {
+  buildPrompt(conv, text, attachments, { voice = false, since = null, image = false, promptEng = false } = {}) {
     const s = this.store.getSettings();
     const done = (m) => m.text && (m.role === 'user' || m.status === 'done');
     let prior = since == null ? conv.messages.filter(done).slice(-s.historyTurns * 2) : conv.messages.slice(since).filter(done);
@@ -228,6 +228,11 @@ class Orchestrator {
     if (attachments.length) prompt += 'The user attached these files (read them from disk):\n' + attachments.map((a) => `- ${a}`).join('\n') + '\n\n';
     if (s.memory && s.memory.trim()) {
       prompt += `(About the user — they asked every assistant to keep this in mind:\n${s.memory.trim().slice(0, 2000)})\n\n`;
+    }
+    if (promptEng) {
+      prompt += '(Act as an expert prompt engineer. Write a ready-to-use prompt the user can paste into an AI model or tool: give it a clear role, ' +
+        'the goal and context, step-by-step instructions, constraints, the exact output format, and an example if useful. Put the final prompt in ' +
+        'one fenced code block so it is easy to copy, then add at most two lines of tips. Write the prompt in the language the user asks for (default: the user\'s language).)\n\n';
     }
     if (image) {
       prompt += '(The user wants a real image. Use your built-in image generation tool to create it — not a text description — ' +
@@ -354,8 +359,10 @@ class Orchestrator {
         plan = { ...c, route, source: route.balanced ? 'balanced' : c.source };
       }
       const image = plan.category === 'image';
-      const freshPrompt = this.buildPrompt(conv, text, attachments, { voice, image });
-      const autonomy = image && s.autonomy === 'safe' ? 'edit' : s.autonomy;
+      const promptEng = plan.category === 'prompt';
+      const freshPrompt = this.buildPrompt(conv, text, attachments, { voice, image, promptEng });
+      const baseAutonomy = opts.autonomy || s.autonomy;
+      const autonomy = image && baseAutonomy === 'safe' ? 'edit' : baseAutonomy;
       const started = Date.now();
       const snapBase = s.snapshots !== false && conv.workspace && cwd === conv.workspace && autonomy !== 'safe'
         ? await this.snapshots.before(conversationId, cwd) : null;
@@ -381,7 +388,7 @@ class Orchestrator {
         // faster, and it remembers its own tool use. Turns from other models are passed along.
         const sess = conv.sessions[step.provider];
         const canResume = sess && sess.id && (sess.model || '') === (model || '') && sess.count <= priorCount;
-        const prompt = canResume ? this.buildPrompt(conv, text, attachments, { voice, image, since: sess.count }) : freshPrompt;
+        const prompt = canResume ? this.buildPrompt(conv, text, attachments, { voice, image, promptEng, since: sess.count }) : freshPrompt;
         send({ type: 'start', provider: step.provider, label: p.label, model, resumed: !!canResume });
         aiMsg.text = '';
         const r = await this.runOnce(step.provider, model, prompt, {
@@ -565,6 +572,28 @@ class Orchestrator {
       '',
       ...answers.map((a, i) => `### ANSWER ${i + 1} (${a.label})\n${a.text.slice(0, 12000)}\n`),
     ].join('\n');
+  }
+
+  /**
+   * Turn a rough request into a clear, professional prompt (the ✨ button). Uses the fastest ready model.
+   * Returns { ok, text }.
+   */
+  async improvePrompt(text) {
+    const helper = this.pickHelper([{ provider: 'claude', model: 'haiku' }, { provider: 'gemini', model: '@flash' }, { provider: 'codex', model: '' }]);
+    if (!helper) return { ok: false, kind: 'unavailable' };
+    const arabic = /[\u0600-\u06FF]/.test(text);
+    const instruction = [
+      'Rewrite the user\'s rough request below into a clear, complete, professional prompt for an AI assistant.',
+      'Keep the user\'s intent exactly; add the missing structure: goal, context, specific requirements, constraints, and the desired output format.',
+      'Do not answer the request. Do not add explanations. Output only the improved prompt text, no quotes, no code fences.',
+      arabic ? 'Write it in Arabic (natural, clear Arabic; keep technical terms as they are).' : 'Write it in the same language as the request.',
+      '', 'Rough request:', ', text.slice(0, 6000), ',
+    ].join('\n');
+    const r = await this.runOnce(helper.provider, this.resolveModel(helper.provider, helper.model), instruction, {
+      cwd: os.tmpdir(), autonomy: 'safe', timeoutMs: 90000, emit: () => {},
+    });
+    if (!r.ok) return { ok: false, kind: r.failure.kind };
+    return { ok: true, text: r.text.replace(/^```\w*\n?|```$/g, '').replace(/^["“]|["”]$/g, '').trim(), provider: helper.provider };
   }
 
   /** Quick health check for one provider. */

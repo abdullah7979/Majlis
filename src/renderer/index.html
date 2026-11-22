@@ -19,6 +19,7 @@
     <nav id="convList"></nav>
     <div class="side-foot">
       <div id="providerDots" class="provider-dots"></div>
+      <button id="openAutos" class="btn-ghost"><span class="ico">⏰</span><span data-i18n="autos"></span></button>
       <button id="openSettings" class="btn-ghost"><span class="ico">⚙</span><span data-i18n="settings"></span></button>
     </div>
   </aside>
@@ -51,11 +52,14 @@
         <button id="vbStop" class="vb-stop"></button>
       </div>
       <div id="composer" class="composer">
+        <div id="promptMenu" class="prompt-menu hidden"></div>
         <div id="attachList" class="attach-list"></div>
         <textarea id="input" rows="1" data-i18n-ph="placeholder"></textarea>
         <div class="composer-bar">
           <button id="attachBtn" class="icon-btn" data-i18n-title="attach">📎</button>
           <button id="micBtn" class="icon-btn mic" data-i18n-title="mic_title">🎙</button>
+          <button id="improveBtn" class="voice-mode" data-i18n-title="improve_title"><span class="ico">✨</span><span data-i18n="improve"></span></button>
+          <button id="promptsBtn" class="icon-btn" data-i18n-title="prompts_title">📚</button>
           <button id="councilBtn" class="voice-mode council-btn" data-i18n-title="council_title"><span class="ico">🏛</span><span data-i18n="council"></span></button>
           <button id="voiceModeBtn" class="voice-mode" data-i18n-title="voice_mode_title"><span class="ico">🎧</span><span data-i18n="voice_mode"></span></button>
           <select id="modelPick" class="model-pick"></select>

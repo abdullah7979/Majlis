@@ -7,6 +7,10 @@
 const { CATEGORIES } = require('./defaults');
 
 const RULES = {
+  prompt: [
+    [/(برومبت|بروموت|برمبت|بروبمت|البرومبت|أمر (لـ|ل)|اوامر (لـ|ل)|أوامر (لـ|ل)|صياغة أمر)/, 6],
+    [/\b(prompts?|system prompt|prompt engineer\w*|write a prompt|custom instructions?)\b/i, 6],
+  ],
   image: [
     [/(صورة|صوره|(?:^|\s)صور(?:\s|$)|تصميم|صمم|شعار|لوقو|لوجو|بوستر|ارسم|رسمة|خلفية|أيقونة|ايقونة|بنر|ثمبنيل)/, 3],
     [/\b(image|logo|poster|draw|illustrat\w*|picture|thumbnail|banner|icon|wallpaper|mockup|render)\b/i, 3],
@@ -55,6 +59,7 @@ function buildClassifierPrompt(text) {
     'You are a router. Classify the user request into exactly ONE category:',
     'code_heavy = large or multi-file programming work, building an app/system, architecture, refactors, hard bugs',
     'code = small or medium programming tasks, snippets, single bug fixes, explaining code',
+    'prompt = writing or improving a prompt / instructions for an AI model or tool',
     'image = creating or designing images, logos, posters, UI visuals, illustrations',
     'research = analysis, summarizing documents or files, comparisons, deep explanations',
     'writing = writing or editing prose: articles, emails, posts, translation',

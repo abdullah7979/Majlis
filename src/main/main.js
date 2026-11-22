@@ -8,6 +8,18 @@ const { Orchestrator } = require('../core/orchestrator');
 const { PROVIDERS } = require('../core/providers');
 const { run, openTerminal, augmentedEnv, which } = require('../core/shell');
 const { CATEGORIES } = require('../core/defaults');
+const { ApiServer } = require('../core/api-server');
+const { Scheduler, nextRun } = require('../core/scheduler');
+let apiServer = null, scheduler = null;
+const toUi = (e) => { if (win && !win.isDestroyed()) win.webContents.send('chat:event', e); };
+const notify = (title, body) => { try { if (Notification.isSupported()) new Notification({ title, body: String(body || '').slice(0, 200) }).show(); } catch (_) {} };
+async function applyApi() {
+  const a = store.getSettings().api || {};
+  try {
+    if (a.enabled) { const r = await apiServer.start(); return { ok: true, ...r }; }
+    await apiServer.stop(); return { ok: true };
+  } catch (e) { return { ok: false, error: e.code === 'EADDRINUSE' ? 'port_in_use' : String(e.message || e) }; }
+}
 
 const SMOKE = process.argv.includes('--smoke-test');
 const VOICE_SELFTEST = (process.argv.find((a) => a.startsWith('--voice-selftest=')) || '').slice('--voice-selftest='.length);
@@ -132,6 +144,20 @@ function registerIpc() {
   };
   h('chat:send', startChat('send'));
   h('chat:council', startChat('council'));
+  h('chat:improve', (text) => orch.improvePrompt(String(text || '')));
+
+  // Local API (connect other systems)
+  h('api:status', () => ({ ...apiServer.status(), key: apiServer.ensureKey(), settings: store.getSettings().api }));
+  h('api:apply', () => applyApi());
+  h('api:regenerate-key', () => apiServer.regenerateKey());
+
+  // Automations (scheduled tasks)
+  const autoList = () => scheduler.tasks().map((t) => ({ ...t, nextRun: t.enabled ? nextRun(t) : null, running: scheduler.running.has(t.id) }));
+  h('auto:list', () => autoList());
+  h('auto:save', (task) => { scheduler.upsert(task || {}); return autoList(); });
+  h('auto:remove', (id) => { scheduler.remove(id); return autoList(); });
+  h('auto:run', (id) => { scheduler.run(id); return true; });
+
   h('chat:undo', ({ conversationId, messageId }) => orch.undoChanges(conversationId, messageId));
   h('chat:cancel', (id) => { orch.cancel(id); return true; });
   h('chat:feedback', ({ category, provider, good, conversationId, messageId }) => {
@@ -215,9 +241,14 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => cb(permission === 'media' || permission === 'clipboard-sanitized-write'));
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'media' || permission === 'clipboard-sanitized-write');
   orch = new Orchestrator(store);
+  apiServer = new ApiServer({ orch, store, version: app.getVersion(), onEvent: toUi });
+  scheduler = new Scheduler({ store, orch, onEvent: toUi, onFinished: (task, msg) => {
+    notify(`⏰ ${task.name}`, msg.status === 'done' ? (msg.text || '✓') : `✖ ${msg.error || ''}`);
+    if (win && !win.isDestroyed()) win.webContents.send('auto:changed');
+  } });
   registerIpc();
   createWindow();
-  if (!SMOKE) { setupTray(); applySystemSettings(); setupUpdater(); }
+  if (!SMOKE) { setupTray(); applySystemSettings(); setupUpdater(); applyApi(); scheduler.start(); }
   if (VOICE_SELFTEST) setTimeout(() => { console.error('VOICE_SELFTEST_TIMEOUT'); app.exit(1); }, 15 * 60e3);
   if (SMOKE) {
     setTimeout(() => { console.error('SMOKE_TIMEOUT'); app.exit(1); }, 45000);
