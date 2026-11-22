@@ -29,8 +29,9 @@ test('installs agy: manifest -> download with progress -> SHA-512 -> placed', as
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy عربي '));
   const target = path.join(dir, 'agy', 'bin', process.platform === 'win32' ? 'agy.cmd' : 'agy');
   const stages = [];
-  const r = await installAgy({ fetch, base: `http://127.0.0.1:${server.address().port}`, target, onProgress: (p) => stages.push(p.stage) });
-  server.close();
+  let r;
+  try { r = await installAgy({ fetch, base: `http://127.0.0.1:${server.address().port}`, target, onProgress: (p) => stages.push(p.stage) }); }
+  finally { server.close(); }
   assert.equal(r.ok, true, JSON.stringify(r));
   assert.equal(r.version, '1.5.14');
   assert.ok(fs.readFileSync(target).equals(bin));
@@ -41,8 +42,10 @@ test('refuses a download whose checksum does not match', async () => {
   const server = await serve(bin, { badHash: true });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agy-'));
   const target = path.join(dir, 'agy');
-  const r = await installAgy({ fetch, base: `http://127.0.0.1:${server.address().port}`, target });
-  server.close();
+  let r;
+  try { r = await installAgy({ fetch, base: `http://127.0.0.1:${server.address().port}`, target }); }
+  finally { server.close(); }
+  assert.deepEqual(fs.readdirSync(dir), [], 'no partial download left behind');
   assert.equal(r.ok, false);
   assert.equal(r.stage, 'verify');
   assert.ok(!fs.existsSync(target));

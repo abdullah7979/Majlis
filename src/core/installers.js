@@ -43,9 +43,12 @@ async function installAgy({ fetch, onProgress = () => {}, base = AGY_BASE, env =
   if (!manifest || !manifest.url || !manifest.sha512) return { ok: false, stage: 'manifest', error: 'Unexpected manifest from Google.' };
 
   say('download', { percent: 0, text: manifest.version });
-  const staging = path.join(path.dirname(target), '..', '..', 'antigravity', 'staging');
-  fs.mkdirSync(staging, { recursive: true });
-  const tmp = path.join(staging, `agy-${Date.now()}.download`);
+  // Download next to the final location (same drive, always writable if the target is).
+  const staging = path.dirname(target);
+  try { fs.mkdirSync(staging, { recursive: true }); } catch (e) {
+    return { ok: false, stage: 'place', error: `Could not create ${staging} (${e.message}).` };
+  }
+  const tmp = path.join(staging, `.agy-${Date.now()}.download`);
   const hash = crypto.createHash('sha512');
   try {
     const res = await fetch(manifest.url, { signal });
