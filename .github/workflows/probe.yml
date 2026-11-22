@@ -1,6 +1,6 @@
 name: Probe CLIs
 
-# Diagnostics: install the vendor CLIs on a clean Windows machine and print their real help text.
+# Diagnostics on a clean Windows machine.
 on:
   workflow_dispatch:
 
@@ -8,9 +8,20 @@ jobs:
   probe:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - name: Install agy the way Majlis does, into an Arabic user path with a space
-        run: node test/windows/agy-install.js
+      - name: Print the Antigravity installer script
+        shell: pwsh
+        run: |
+          $s = Invoke-RestMethod https://antigravity.google/cli/install.ps1
+          Write-Host "=====BEGIN====="
+          Write-Host $s
+          Write-Host "=====END====="
+      - name: agy tools and image capability
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          irm https://antigravity.google/cli/install.ps1 | iex
+          $agy = "$env:LOCALAPPDATA\agy\bin\agy.exe"
+          & $agy help 2>&1 | Out-String
+          & $agy plugins --help 2>&1 | Out-String
+          & $agy mcp --help 2>&1 | Out-String
