@@ -8,19 +8,9 @@ jobs:
   probe:
     runs-on: windows-latest
     steps:
-      - name: Install Antigravity CLI
-        shell: powershell
-        run: |
-          irm https://antigravity.google/cli/install.ps1 | iex
-      - name: Probe agy headless input
-        shell: cmd
-        continue-on-error: true
-        run: |
-          set AGY=%LOCALAPPDATA%\agy\bin\agy.exe
-          echo {"event":"user","message":{"content":"hi"}}> in.jsonl
-          echo ===== E: stream-json stdin, -p= empty
-          "%AGY%" --input-format stream-json --output-format stream-json -p= < in.jsonl 2>&1 | findstr /v accounts.google
-          echo ===== F: stream-json stdin, no -p
-          "%AGY%" --input-format stream-json --output-format stream-json < in.jsonl 2>&1 | findstr /v accounts.google
-          echo ===== G: text stdin, -p=
-          echo hello there| "%AGY%" --output-format stream-json -p= 2>&1 | findstr /v accounts.google
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install agy the way Majlis does, into an Arabic user path with a space
+        run: node test/windows/agy-install.js
