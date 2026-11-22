@@ -615,6 +615,41 @@ class Orchestrator {
   }
 
   /**
+   * Speech-to-text repair. Whisper hears Arabic dialect and mixed Arabic/English tech words imperfectly
+   * ("فلتر" for Flutter, wrong hamza, split words). A fast model fixes the transcript using what Majlis
+   * knows (vocabulary, learned facts, memory, the last messages), without answering or rephrasing it.
+   * Falls back to the original text on any doubt, so it can only help.
+   */
+  async fixTranscript(text, { conversationId = null } = {}) {
+    const raw = String(text || '').trim();
+    const s = this.store.getSettings();
+    const v = s.voice || {};
+    if (v.smartFix === false || raw.split(/\s+/).length < 3) return { ok: true, text: raw, fixed: false };
+    const helper = this.pickHelper([{ provider: 'claude', model: 'haiku' }, { provider: 'gemini', model: '@flash' }, { provider: 'codex', model: '' }]);
+    if (!helper) return { ok: true, text: raw, fixed: false };
+    const conv = conversationId ? this.store.getConversation(conversationId) : null;
+    const recent = conv ? conv.messages.filter((m) => m.role === 'user').slice(-3).map((m) => String(m.text || '').slice(0, 200)) : [];
+    const vocab = String(v.vocabulary || '').split(/[,،\n]/).map((x) => x.trim()).filter(Boolean).slice(0, 80);
+    const learned = (s.learn !== false && s.learned || []).map((x) => x.text).slice(-15);
+    const instruction = [
+      'You correct speech-to-text errors. The text below was produced by a speech recognizer from an Arabic speaker (Saudi/Gulf dialect, often mixing English technical words).',
+      'Fix only recognition mistakes: wrong or misheard words, broken Arabic spelling (hamza, ta marbuta, alef maqsura), words wrongly split or merged, and English/technical terms that were written in Arabic letters or garbled (write them in Latin letters, e.g. Flutter, Kotlin, API, GitHub, Claude).',
+      'Keep the speaker\'s words, dialect and meaning. Do NOT translate, summarize, answer, or add anything. Add basic punctuation only. If it is already correct, return it unchanged.',
+      vocab.length ? `Words/names the speaker uses: ${vocab.join('، ')}` : '',
+      s.memory ? `About the speaker: ${String(s.memory).slice(0, 600)}` : '',
+      learned.length ? `Also known: ${learned.join(' | ')}` : '',
+      recent.length ? `Their previous messages (context only): ${recent.join(' / ')}` : '',
+      'Output ONLY the corrected text on one line.', '', 'Text:', '<<<', raw.slice(0, 3000), '>>>',
+    ].filter((x) => x !== '').join('\n');
+    const r = await this.runOnce(helper.provider, this.resolveModel(helper.provider, helper.model), instruction, {
+      cwd: os.tmpdir(), autonomy: 'safe', timeoutMs: 45000, emit: () => {},
+    });
+    if (!r.ok) return { ok: true, text: raw, fixed: false };
+    const out = acceptFix(raw, r.text);
+    return { ok: true, text: out, fixed: out !== raw, provider: helper.provider };
+  }
+
+  /**
    * Like the memory in the official apps: after a reply, a fast model notes durable facts and preferences
    * the user revealed (how they like answers, their work, their projects, tools). Shared by every model
    * through buildPrompt. Cheap: runs only when the message looks personal, or every 8th message.
@@ -670,6 +705,14 @@ function addTokens(msg, e) {
   msg.tokens = { input: t0.input + e.input, output: t0.output + e.output, cached: t0.cached + e.cached, estimated: !!(t0.estimated || e.estimated) };
 }
 
+/** Accept a model's correction only if it still looks like the same sentence. */
+function acceptFix(original, candidate) {
+  let c = String(candidate || '').replace(/^```\w*\n?|```$/g, '').replace(/^<<<|>>>$/g, '').replace(/^["“«]|["”»]$/g, '').replace(/\s+/g, ' ').trim();
+  if (!c || c.length > original.length * 1.6 + 12 || c.length < original.length * 0.5) return original;
+  if (/^(sorry|i can't|i cannot|عذرا|عذراً|آسف|لا أستطيع)/i.test(c)) return original;
+  return c;
+}
+
 /** Rough token count when a CLI reports none (~4 chars/token for Latin text, ~2.5 for Arabic). */
 function estimateTokens(text) {
   const t = String(text || '');
@@ -677,4 +720,4 @@ function estimateTokens(text) {
   return Math.ceil(arabic / 2.5 + (t.length - arabic) / 4);
 }
 
-module.exports = { Orchestrator, estimateTokens };
+module.exports = { Orchestrator, estimateTokens, acceptFix };

@@ -404,6 +404,15 @@ async function sendCurrent({ voice = false } = {}) {
 // ------------------------------------------------------------------ voice
 const V = { state: 'idle', mode: false, rec: null, awaiting: null, empties: 0 };
 function voiceSettings() { return (S.settings && S.settings.voice) || {}; }
+/** Fast-model repair of recognition mistakes. Never blocks voice: any failure keeps the original text. */
+async function repairTranscript(text) {
+  if (voiceSettings().smartFix === false) return text;
+  try {
+    setVoiceUI('transcribing', t('voice_fixing'));
+    const r = await api.voice.fix(text, S.conv ? S.conv.id : null);
+    return (r && r.ok && r.text) ? r.text : text;
+  } catch (_) { return text; }
+}
 function asrLanguage() { const l = voiceSettings().language || 'auto'; return l === 'auto' ? (S.lang === 'ar' ? 'ar' : 'auto') : l; }
 /** Speech model: download/load in the background so the first mic press is instant. */
 function initASR() {
@@ -463,6 +472,7 @@ async function listen() {
     V.mode = false; setVoiceUI('idle'); toast(`${t('voice_failed')} ${e && e.message ? '(' + e.message + ')' : ''}`); return;
   }
   if (!r.text) { if (V.mode) return listen(); setVoiceUI('idle'); return; }
+  r.text = await repairTranscript(r.text);
   const input = $('#input');
   input.value = input.value.trim() ? `${input.value.trim()} ${r.text}` : r.text;
   autoGrow();
@@ -751,7 +761,13 @@ function micTestField() {
       if (!res.pcm) { out.textContent = '—'; return; }
       out.textContent = t('mic_test_working');
       const r = await window.ASR.transcribe(res.pcm, { language: asrLanguage(), model: voiceSettings().model });
-      out.textContent = `${r.text || '—'}   (${(r.ms / 1000).toFixed(1)}s · ${r.device === 'webgpu' ? t('asr_gpu') : t('asr_cpu')})`;
+      const raw = r.text;
+      out.textContent = `${raw || '—'}   (${(r.ms / 1000).toFixed(1)}s · ${r.device === 'webgpu' ? t('asr_gpu') : t('asr_cpu')})`;
+      if (raw && voiceSettings().smartFix !== false) {
+        out.textContent += `\n${t('voice_fixing')}`;
+        const f = await api.voice.fix(raw, null);
+        out.textContent = `${t('heard_raw')}: ${raw}\n${t('after_fix')}: ${f && f.text ? f.text : raw}   (${(r.ms / 1000).toFixed(1)}s · ${r.device === 'webgpu' ? t('asr_gpu') : t('asr_cpu')})`;
+      }
     } catch (e) { out.textContent = e && e.name === 'NotAllowedError' ? t('mic_denied') : `✖ ${(e && e.message) || e}`; }
     finally { btn.disabled = false; }
   } }, `🎙 ${t('mic_test')}`);
@@ -759,8 +775,16 @@ function micTestField() {
     h('option', { value: 'auto' }, t('lang_auto')), h('option', { value: 'ar' }, 'العربية'), h('option', { value: 'en' }, 'English'));
   lang.value = voiceSettings().language || 'auto';
   const st = window.ASR ? window.ASR.status() : { status: 'idle' };
+  const model = h('select', { onchange: async (e) => { await saveSettings({ voice: { model: e.target.value } }); if (window.ASR) window.ASR.load(e.target.value).catch(() => {}); } },
+    h('option', { value: 'onnx-community/whisper-large-v3-turbo' }, t('model_fast')), h('option', { value: 'onnx-community/whisper-large-v3-ONNX' }, t('model_accurate')));
+  model.value = voiceSettings().model || 'onnx-community/whisper-large-v3-turbo';
+  const vocab = h('textarea', { class: 'memory', rows: 2, dir: 'auto', placeholder: t('vocab_ph') }); vocab.value = voiceSettings().vocabulary || '';
+  vocab.onchange = () => saveSettings({ voice: { vocabulary: vocab.value } });
   return h('div', {},
     field(t('speech_lang'), lang),
+    field(t('speech_model'), model, t('speech_model_help')),
+    field(t('smart_fix'), toggle(voiceSettings().smartFix !== false, (v) => saveSettings({ voice: { smartFix: v } })), t('smart_fix_help')),
+    h('div', { class: 'field', style: 'display:block' }, h('label', {}, t('vocab')), h('p', { class: 'help', style: 'margin:4px 0' }, t('vocab_help')), vocab),
     field(t('speech_engine'), h('span', { id: 'asrStatus', class: 'help', style: 'margin:0' }, asrStatusText(st))),
     h('div', { class: 'field', style: 'display:block' }, h('label', {}, t('mic_test')), h('div', { class: 'mic-test', style: 'margin-top:8px' }, btn, out)));
 }
@@ -995,7 +1019,7 @@ async function runVoiceSelftest({ file, model, language }) {
     await window.ASR.load(model || voiceSettings().model);
     const loadMs = Date.now() - t0;
     const r = await window.ASR.transcribe(pcm, { language: language || 'auto', model: model || voiceSettings().model });
-    await api.selftestResult({ ok: !!r.text, text: r.text, ms: r.ms, loadMs, device: r.device, seconds: +(pcm.length / 16000).toFixed(1) });
+    await api.selftestResult({ ok: !!r.text, text: r.text, ms: r.ms, loadMs, device: r.device, model: window.ASR.status().model, fallback: window.ASR.status().fallback || null, seconds: +(pcm.length / 16000).toFixed(1) });
   } catch (e) {
     await api.selftestResult({ ok: false, error: String((e && e.stack) || e) });
   }

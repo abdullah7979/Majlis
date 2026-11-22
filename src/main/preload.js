@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('majlis', {
     status: invoke('providers:status'), test: invoke('providers:test'), refreshModels: invoke('providers:refresh-models'), login: invoke('providers:login'),
     install: invoke('providers:install'), clearCooldown: invoke('providers:clear-cooldown'), onInstallLog: on('providers:install-log'),
   },
+  voice: { fix: invoke('voice:fix') },
   api: { status: invoke('api:status'), apply: invoke('api:apply'), regenerateKey: invoke('api:regenerate-key'), selftest: invoke('api:selftest') },
   auto: { list: invoke('auto:list'), save: invoke('auto:save'), remove: invoke('auto:remove'), run: invoke('auto:run'), onChanged: on('auto:changed') },
   system: { checkNode: invoke('system:check-node') },

@@ -144,6 +144,7 @@ function registerIpc() {
   };
   h('chat:send', startChat('send'));
   h('chat:council', startChat('council'));
+  h('voice:fix', (text, conversationId) => orch.fixTranscript(String(text || ''), { conversationId }));
   h('chat:improve', (text) => orch.improvePrompt(String(text || '')));
 
   // Local API (connect other systems)

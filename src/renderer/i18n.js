@@ -192,3 +192,23 @@ Object.assign(window.I18N.ar, {
   learn_on: 'تعلّم من محادثاتي', learned_none: 'للحين ما تعلّم شيء. بيمتلي مع الوقت.', learned_clear: 'انسَ كل شيء', learned_clear_q: 'تحذف كل اللي تعلّمه مجلس عنك؟',
   api_test: 'فحص الاتصال', api_test_btn: 'افحص الحين', api_test_ok: 'شغّال', api_models_count: 'نموذج',
 });
+
+// v0.8: voice repair
+Object.assign(window.I18N.en, {
+  voice_fixing: 'Checking the words…', smart_fix: 'Smart correction', smart_fix_help: 'A fast model fixes misheard words and spelling after you speak (adds a few seconds).',
+  vocab: 'Your words and names', vocab_help: 'Names and terms you say often (apps, companies, places). They help the correction get them right.', vocab_ph: 'e.g. Majlis, Flutter, Kotlin, مصروف ذكي',
+  heard_raw: 'Heard', after_fix: 'After correction',
+});
+Object.assign(window.I18N.ar, {
+  voice_fixing: 'أراجع الكلمات…', smart_fix: 'تصحيح ذكي', smart_fix_help: 'نموذج سريع يصلّح الكلمات اللي اتسمّعت غلط والإملاء بعد ما تتكلم (يزيد كم ثانية).',
+  vocab: 'كلماتك وأسماؤك', vocab_help: 'أسماء ومصطلحات تقولها كثير (تطبيقات، شركات، أماكن). تساعد التصحيح يكتبها صح.', vocab_ph: 'مثال: مجلس، Flutter، Kotlin، مصروف ذكي',
+  heard_raw: 'سمعتها', after_fix: 'بعد التصحيح',
+});
+Object.assign(window.I18N.en, {
+  speech_model: 'Speech model', model_fast: 'Fast (1.3 GB)', model_accurate: 'Most accurate (2.1 GB, needs a graphics card)',
+  speech_model_help: 'The accurate model understands Arabic better but downloads once (about 2 GB) and is a little slower. If it cannot run on this PC, Majlis goes back to the fast one by itself.',
+});
+Object.assign(window.I18N.ar, {
+  speech_model: 'نموذج الصوت', model_fast: 'سريع (١٫٣ جيجا)', model_accurate: 'الأدق (٢٫١ جيجا، يحتاج كرت شاشة)',
+  speech_model_help: 'النموذج الأدق يفهم العربي أحسن، يتحمّل مرة وحدة (حوالي ٢ جيجا) وأبطأ شوي. لو ما اشتغل على الجهاز يرجع مجلس للسريع تلقائياً.',
+});

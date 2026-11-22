@@ -143,3 +143,30 @@ test('prompt tools: "write me a prompt" goes to the prompt engineer; ✨ improve
   assert.match(c.input, /Write it in Arabic/);
   assert.match(c.input, /<<<\nابي موقع لمطعمي\n>>>/, 'the user\'s own text reaches the model');
 });
+
+test('voice repair: fixes misheard words, keeps vocabulary in the prompt, rejects rewrites', async () => {
+  fake.reset();
+  const store = new Store(tempDir());
+  store.updateSettings({ onboarded: true, learn: false, voice: { vocabulary: 'Flutter، مصروف ذكي' } });
+  const orch = new Orchestrator(store); await orch.refreshCatalog(true); fake.reset();
+  process.env.FAKE_REPLY_claude = 'أبغى أسوي تطبيق بـ Flutter للأندرويد';
+  try {
+    const r = await orch.fixTranscript('ابغى اسوي تطبيق بفلاتر للاندرويد');
+    assert.equal(r.fixed, true);
+    assert.equal(r.text, 'أبغى أسوي تطبيق بـ Flutter للأندرويد');
+    const c = fake.calls().find((x) => x.name === 'claude');
+    assert.ok(c.args.includes('haiku'));
+    assert.match(c.input, /Flutter، مصروف ذكي/);
+    // an answer or a rewrite instead of a correction is thrown away
+    process.env.FAKE_REPLY_claude = 'Sure! Flutter is a great framework made by Google. Here is a long explanation of how to start building apps with it today.';
+    const bad = await orch.fixTranscript('ابغى اسوي تطبيق بفلاتر للاندرويد');
+    assert.equal(bad.text, 'ابغى اسوي تطبيق بفلاتر للاندرويد');
+    assert.equal(bad.fixed, false);
+    // very short text and the off switch skip the model entirely
+    fake.reset();
+    assert.equal((await orch.fixTranscript('مرحبا')).fixed, false);
+    store.updateSettings({ voice: { smartFix: false } });
+    assert.equal((await orch.fixTranscript('ابغى اسوي تطبيق بفلاتر للاندرويد')).fixed, false);
+    assert.equal(fake.calls().length, 0);
+  } finally { delete process.env.FAKE_REPLY_claude; }
+});

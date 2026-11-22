@@ -159,6 +159,8 @@ function main() {
   if (/Transcribe the speech/.test(fullInput)) {
     if (!at || !fs.existsSync(at[1])) die('file not found in workspace', 1);
     answer = process.env.FAKE_TRANSCRIPT || 'Here is the transcript: "ابني لي صفحة هبوط لمطعمي"';
+  } else if (/You correct speech-to-text errors/.test(fullInput) && process.env[`FAKE_REPLY_${name}`]) {
+    answer = process.env[`FAKE_REPLY_${name}`];
   } else if (/You maintain a short memory/.test(fullInput) && process.env[`FAKE_REPLY_${name}`]) {
     answer = process.env[`FAKE_REPLY_${name}`];
   } else if (/You are a router/.test(fullInput)) {

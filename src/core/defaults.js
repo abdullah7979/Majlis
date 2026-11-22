@@ -58,6 +58,8 @@ const DEFAULT_SETTINGS = {
     model: 'onnx-community/whisper-large-v3-turbo',
     language: 'auto',          // 'auto' | 'ar' | 'en'
     preload: true,             // download/load the speech model in the background at startup
+    smartFix: true,            // a fast model repairs recognition mistakes (Arabic spelling, English tech words)
+    vocabulary: '',            // names/terms you say often, comma separated (helps the repair step)
     autoSend: true,            // send as soon as you stop talking
     speakReplies: true,        // in voice conversation mode, read answers aloud
     voiceName: '',             // preferred system voice ('' = best Arabic/English voice available)

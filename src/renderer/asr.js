@@ -26,9 +26,10 @@ async function pickDevice() {
 }
 
 /** Load (and on first use download) the model. Safe to call many times. */
-function load(model = 'onnx-community/whisper-large-v3-turbo') {
+const TURBO = 'onnx-community/whisper-large-v3-turbo';
+function load(model = TURBO) {
   if (pipe && state.model === model) return Promise.resolve(pipe);
-  if (loading) return loading;
+  if (loading && state.model === model) return loading;
   loading = (async () => {
     state.status = 'loading'; state.error = null; state.progress = 0; state.model = model; notify();
     const files = new Map();
@@ -47,6 +48,7 @@ function load(model = 'onnx-community/whisper-large-v3-turbo') {
         : { encoder_model: 'q8', decoder_model_merged: 'q8' };
       return pipeline('automatic-speech-recognition', model, { device, dtype, progress_callback });
     };
+    if (pipe) { try { await pipe.dispose(); } catch (_) {} pipe = null; }
     let device = await pickDevice();
     try {
       pipe = await tryLoad(device);
@@ -57,9 +59,13 @@ function load(model = 'onnx-community/whisper-large-v3-turbo') {
     }
     state.device = device; state.status = 'ready'; state.progress = 100; notify();
     return pipe;
-  })().catch((e) => {
+  })().catch(async (e) => {
+    pipe = null; loading = null;
+    if (model !== TURBO) { // the accurate model did not fit/load on this PC: keep voice working with the standard one
+      state.fallback = String((e && e.message) || e); notify();
+      return load(TURBO);
+    }
     state.status = 'error'; state.error = String((e && e.message) || e); notify();
-    pipe = null;
     throw e;
   }).finally(() => { loading = null; });
   return loading;
