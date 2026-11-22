@@ -43,7 +43,7 @@ class Store {
       if (!raw.schema || raw.schema < 4) this._migratedGemini = true;
       try { writeJson(this.settingsFile, this.settings); } catch (_) {}
     }
-    this.state = deepMerge({ cooldowns: {}, usage: {}, learning: {}, auth: {}, models: {} }, readJson(this.stateFile, {}));
+    this.state = deepMerge({ cooldowns: {}, usage: {}, learning: {}, auth: {}, models: {}, tokens: {} }, readJson(this.stateFile, {}));
     if (this._migratedGemini) { delete this.state.models.gemini; delete this.state.auth.gemini; delete this.state.cooldowns.gemini; }
   }
 
@@ -75,6 +75,31 @@ class Store {
     u[day] = u[day] || {};
     u[day][provider] = (u[day][provider] || 0) + 1;
     this.saveState();
+  }
+  /**
+   * Tokens each subscription spent, per day (kept 30 days). `estimated` counts runs where the CLI
+   * reported no numbers and Majlis estimated them from the text length.
+   */
+  addTokens(provider, { input = 0, output = 0, cached = 0, estimated = false } = {}, day = new Date().toISOString().slice(0, 10)) {
+    const T = this.state.tokens;
+    const cutoff = new Date(Date.now() - 30 * 86400e3).toISOString().slice(0, 10);
+    for (const d of Object.keys(T)) if (d < cutoff) delete T[d];
+    const e = ((T[day] = T[day] || {})[provider] = T[day][provider] || { input: 0, output: 0, cached: 0, runs: 0, estimated: 0 });
+    e.input += input; e.output += output; e.cached += cached; e.runs += 1; if (estimated) e.estimated += 1;
+    this.saveState();
+  }
+  /** { today: {provider: totals}, week: {provider: totals}, days: [{day, provider: total}] } */
+  tokenReport(now = Date.now()) {
+    const T = this.state.tokens, today = new Date(now).toISOString().slice(0, 10);
+    const weekStart = new Date(now - 6 * 86400e3).toISOString().slice(0, 10);
+    const sum = (a, b) => ({ input: a.input + b.input, output: a.output + b.output, cached: a.cached + b.cached, runs: a.runs + b.runs, estimated: a.estimated + b.estimated });
+    const zero = { input: 0, output: 0, cached: 0, runs: 0, estimated: 0 };
+    const week = {}, month = {};
+    for (const [d, per] of Object.entries(T)) for (const [p, v] of Object.entries(per)) {
+      month[p] = sum(month[p] || zero, v);
+      if (d >= weekStart) week[p] = sum(week[p] || zero, v);
+    }
+    return { today: T[today] || {}, week, month };
   }
   /** Remember the last proof that a provider is (not) signed in. */
   markAuth(provider, ok) { this.state.auth[provider] = { ok, at: Date.now() }; this.saveState(); }

@@ -16,7 +16,7 @@ const fake = installFakeClis();
 async function setup(settings = {}) {
   fake.reset();
   const store = new Store(tempDir());
-  store.updateSettings({ onboarded: true, ...settings });
+  store.updateSettings({ onboarded: true, learn: false, ...settings });
   const orch = new Orchestrator(store);
   await orch.refreshCatalog(true);
   fake.reset();
@@ -423,4 +423,38 @@ test('council still answers when one member is out of quota', async () => {
   assert.equal(msg.status, 'done');
   assert.equal(msg.council.filter((m) => m.ok).length, 2);
   assert.equal(msg.council.find((m) => m.provider === 'codex').kind, 'limit');
+});
+
+test('learning: personal facts are saved once, shared with every model, secrets skipped', async () => {
+  const { orch, conv, store } = await setup({ learn: true });
+  process.env.FAKE_REPLY_claude = '{"add":["يفضّل الردود المختصرة بالعربي","يشتغل على تطبيق مجلس","password is 1234"],"remove":[]}';
+  try {
+    await send(orch, conv, 'أنا أحب الردود المختصرة، وأشتغل على تطبيق مجلس', { force: 'codex|' });
+    await orch.learning;
+    const learned = store.getSettings().learned.map((x) => x.text);
+    assert.deepEqual(learned, ['يفضّل الردود المختصرة بالعربي', 'يشتغل على تطبيق مجلس']);
+    fake.reset();
+    await send(orch, conv, 'what is 2+2', { force: 'gemini|' });
+    assert.match(callsOf('gemini')[0].input, /يفضّل الردود المختصرة/);
+    // turning learning off stops both learning and using it
+    store.updateSettings({ learn: false });
+    fake.reset();
+    await send(orch, conv, 'انا اسمي عبدالله', { force: 'gemini|' });
+    await orch.learning;
+    assert.equal(callsOf('claude').length, 0);
+    assert.doesNotMatch(callsOf('gemini')[0].input, /يفضّل/);
+  } finally { delete process.env.FAKE_REPLY_claude; }
+});
+
+test('tokens: real numbers from Claude/Codex, estimates when a CLI reports none', async () => {
+  const { orch, conv, store } = await setup();
+  const r1 = await send(orch, conv, 'hello', { force: 'claude|' });
+  await send(orch, conv, 'hello', { force: 'codex|' });
+  await send(orch, conv, 'hello', { force: 'gemini|' });
+  const t = store.tokenReport().today;
+  assert.deepEqual([t.claude.input, t.claude.output, t.claude.cached, t.claude.estimated], [120, 45, 3000, 0]);
+  assert.deepEqual([t.codex.input, t.codex.cached, t.codex.output], [900, 100, 70]);
+  assert.equal(t.gemini.estimated, 1);
+  assert.ok(t.gemini.input > 0 && t.gemini.output > 0);
+  assert.equal(r1.msg.tokens.output, 45);
 });

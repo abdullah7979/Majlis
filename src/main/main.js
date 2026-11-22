@@ -150,6 +150,18 @@ function registerIpc() {
   h('api:status', () => ({ ...apiServer.status(), key: apiServer.ensureKey(), settings: store.getSettings().api }));
   h('api:apply', () => applyApi());
   h('api:regenerate-key', () => apiServer.regenerateKey());
+  // Calls the running API exactly like an outside system would (key + /v1/models), without spending any model quota.
+  h('api:selftest', async () => {
+    const st = apiServer.status();
+    if (!st.running) return { ok: false, error: 'API is off' };
+    const t0 = Date.now();
+    try {
+      const r = await net.fetch(`http://127.0.0.1:${st.port}/v1/models`, { headers: { Authorization: `Bearer ${apiServer.ensureKey()}` } });
+      if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
+      const j = await r.json();
+      return { ok: true, models: j.data.length, ms: Date.now() - t0 };
+    } catch (e) { return { ok: false, error: String(e.message || e) }; }
+  });
 
   // Automations (scheduled tasks)
   const autoList = () => scheduler.tasks().map((t) => ({ ...t, nextRun: t.enabled ? nextRun(t) : null, running: scheduler.running.has(t.id) }));

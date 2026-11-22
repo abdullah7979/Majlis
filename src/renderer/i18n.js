@@ -176,3 +176,19 @@ Object.assign(window.I18N.ar, {
   auto_running: 'تشتغل…', auto_on: 'مفعّلة', auto_tray_note: 'نصيحة: فعّل «إخفاء في شريط المهام» و«التشغيل مع ويندوز» عشان المهام تشتغل حتى لو قفلت النافذة.',
   days: 'أحد,اثنين,ثلاثاء,أربعاء,خميس,جمعة,سبت', auto_ex1: 'ملخص الصباح', auto_ex1_p: 'أعطني ملخص قصير لأهم أخبار التقنية والذكاء الاصطناعي اليوم في 7 نقاط مع المصادر.',
 });
+
+// v0.7: learning + tokens
+Object.assign(window.I18N.en, {
+  tokens: 'tokens', tok_in: 'Input', tok_out: 'Output', tok_cached: 'From cache (cheap)', tok_estimated: 'some estimated', tok_week: 'Last 7 days',
+  tok_note: 'Tokens come from your subscriptions, not from Majlis. Claude and ChatGPT report exact numbers; Gemini is estimated from the text length.',
+  learned_title: 'What Majlis learned about you', learned_help: 'Like the memory in the official apps: Majlis notices what you like (language, answer style, your projects) and every model uses it. Delete anything you want.',
+  learn_on: 'Learn from my conversations', learned_none: 'Nothing yet. It fills up as you talk.', learned_clear: 'Forget everything', learned_clear_q: 'Delete everything Majlis learned about you?',
+  api_test: 'Check connection', api_test_btn: 'Test now', api_test_ok: 'Works', api_models_count: 'models',
+});
+Object.assign(window.I18N.ar, {
+  tokens: 'توكن', tok_in: 'المدخل', tok_out: 'المخرج', tok_cached: 'من الذاكرة المؤقتة (أرخص)', tok_estimated: 'بعضها تقديري', tok_week: 'آخر ٧ أيام',
+  tok_note: 'التوكنات تنصرف من اشتراكاتك، مو من مجلس. Claude وChatGPT يعطون أرقام دقيقة؛ Gemini نقدّره من طول النص.',
+  learned_title: 'وش تعلّم مجلس عنك', learned_help: 'مثل ذاكرة التطبيقات الأصلية: مجلس ينتبه لاللي تحبه (لغتك، أسلوب الرد، مشاريعك) وكل النماذج تستفيد منه. احذف أي شيء ما تبيه.',
+  learn_on: 'تعلّم من محادثاتي', learned_none: 'للحين ما تعلّم شيء. بيمتلي مع الوقت.', learned_clear: 'انسَ كل شيء', learned_clear_q: 'تحذف كل اللي تعلّمه مجلس عنك؟',
+  api_test: 'فحص الاتصال', api_test_btn: 'افحص الحين', api_test_ok: 'شغّال', api_models_count: 'نموذج',
+});

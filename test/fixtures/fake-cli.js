@@ -159,6 +159,8 @@ function main() {
   if (/Transcribe the speech/.test(fullInput)) {
     if (!at || !fs.existsSync(at[1])) die('file not found in workspace', 1);
     answer = process.env.FAKE_TRANSCRIPT || 'Here is the transcript: "ابني لي صفحة هبوط لمطعمي"';
+  } else if (/You maintain a short memory/.test(fullInput) && process.env[`FAKE_REPLY_${name}`]) {
+    answer = process.env[`FAKE_REPLY_${name}`];
   } else if (/You are a router/.test(fullInput)) {
     answer = `{"category":"${process.env.FAKE_CLASSIFY || 'quick'}","reason":"fake"}`;
   } else {
@@ -169,13 +171,13 @@ function main() {
     console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: model || 'claude-sonnet' }));
     console.log(JSON.stringify({ type: 'assistant', session_id: sid, message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'x.js' } }] } }));
     for (const part of [answer.slice(0, 5), answer.slice(5)]) console.log(JSON.stringify({ type: 'stream_event', session_id: sid, event: { type: 'content_block_delta', delta: { type: 'text_delta', text: part } } }));
-    console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: answer, session_id: sid }));
+    console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: answer, session_id: sid, usage: { input_tokens: 100, cache_creation_input_tokens: 20, cache_read_input_tokens: 3000, output_tokens: 45 } }));
   } else if (name === 'codex') {
     console.log(JSON.stringify({ type: 'thread.started', thread_id: sid }));
     console.log(JSON.stringify({ type: 'turn.started' }));
     console.log(JSON.stringify({ type: 'item.started', item: { id: 'item_1', type: 'command_execution', command: 'ls -la' } }));
     console.log(JSON.stringify({ type: 'item.completed', item: { id: 'item_2', type: 'agent_message', text: answer } }));
-    console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1 } }));
+    console.log(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1000, cached_input_tokens: 100, output_tokens: 50, reasoning_output_tokens: 20 } }));
     const out = flags['--output-last-message'] || flags['-o'];
     if (out) fs.writeFileSync(out, answer, 'utf8');
   } else {

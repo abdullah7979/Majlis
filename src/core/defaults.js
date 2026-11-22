@@ -39,7 +39,9 @@ const DEFAULT_SETTINGS = {
     { id: 'p6', name: 'خطة عمل', text: 'سوّ لي خطة عمل مرتبة بخطوات واضحة ومدة تقديرية لكل خطوة، والأدوات المطلوبة، للهدف التالي:\n\n' },
   ],
   api: { enabled: false, port: 4891, key: '', autonomy: 'safe', allowLan: false }, // local OpenAI-compatible API for other apps
-  automations: [],   // scheduled tasks (see scheduler.js)
+  automations: [],
+  learn: true,       // learn the user's preferences from conversations (shared by all models)
+  learned: [],       // [{ id, text, ts }] what Majlis learned (user can delete any item)   // scheduled tasks (see scheduler.js)
   snapshots: true,   // record file changes in project folders so they can be undone
   historyTurns: 10,
   cooldownMinutes: 60,

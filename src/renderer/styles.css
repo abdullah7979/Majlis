@@ -281,7 +281,7 @@ details.council .mhead { display: flex; align-items: center; gap: 8px; margin-bo
 details.council .mhead .avatar { width: 22px; height: 22px; font-size: 10px; border-radius: 6px; }
 .council-btn.on { border-color: #e0b25b; background: rgba(224,178,91,.14); color: #f4d9a2; }
 .usage .uhead { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 8px; }
-.urow { display: grid; grid-template-columns: 80px 1fr 34px auto; gap: 10px; align-items: center; padding: 5px 0; font-size: 13px; }
+.urow { display: grid; grid-template-columns: 80px 1fr 34px auto auto; gap: 10px; align-items: center; padding: 5px 0; font-size: 13px; }
 .ubar { height: 8px; border-radius: 6px; background: var(--bg); overflow: hidden; }
 .ubar i { display: block; height: 100%; border-radius: 6px; background: var(--accent); }
 .ubar i.claude { background: var(--claude); } .ubar i.codex { background: var(--codex); } .ubar i.gemini { background: var(--gemini); }
@@ -315,3 +315,7 @@ code.secret, .pane code { background: var(--bg); padding: 4px 8px; border-radius
 details.example { margin-bottom: 10px; }
 details.example summary { cursor: pointer; font-weight: 600; padding: 4px 0; }
 details.example pre { white-space: pre-wrap; word-break: break-all; }
+.urow .utok { color: var(--muted); font-size: 12px; min-width: 70px; text-align: end; }
+.msg-foot .tok { color: var(--muted); cursor: help; }
+.learned .lrow { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); }
+.learned .lrow:last-of-type { border-bottom: 0; }

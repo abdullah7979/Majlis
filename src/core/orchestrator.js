@@ -14,6 +14,8 @@ const { Snapshots } = require('./snapshots');
 
 // Short replies that continue the current task rather than start a new one.
 const FOLLOW_UP_RE = /^\s*(نعم|ايوه|إيوه|أيوه|ايه|إيه|اي|أي|اوكي|أوكي|تمام|طيب|زين|حلو|ممتاز|كمل|كمّل|استمر|كمله|كملها|كمّلها|زد|زيد|أكثر|اكثر|عدل|عدّل|عدلها|عدّلها|غيره|غيّره|غيرها|سو|سوه|سوّه|سوها|سويها|ابدأ|ابدا|يلا|نفذ|نفّذ|طبق|طبّق|جرب|جرّب|صحح|صلحها|صلّحها|لا|ok|okay|yes|yep|sure|continue|go on|go ahead|do it|more|again|retry|fix it|no)(?=$|[\s.,!؟?،])/i;
+const LEARN_CUE_RE = /(أنا|انا|احب|أحب|ابغى|أبغى|ابي|أبي|أفضّل|افضل|لا تسو|لا تكتب|دايم|دائم|دايما|دائما|مشروعي|شغلي|عملي|وظيفتي|اشتغل|أشتغل|اسمي|عندي|بالعربي|باختصار|مختصر|\bI(?: am|'m| prefer| like| want| work)\b|\b(always|never|my (job|project|company|name))\b)/i;
+const SECRET_RE = /(sk-|mj-|password|passwd|كلمة (المرور|السر)|api[_ ]?key|token\b|\b\d{12,}\b)/i;
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif)$/i;
 
 const MAX_MSG_CHARS = 8000;
@@ -93,6 +95,7 @@ class Orchestrator {
   async providerStatus() {
     const s = this.store.getSettings();
     const usage = this.store.usageToday();
+    const tokens = this.store.tokenReport();
     const env = augmentedEnv();
     this.refreshCatalog().catch(() => {});
     const out = {};
@@ -111,6 +114,8 @@ class Orchestrator {
         enabled: !!(s.providers[p.id] && s.providers[p.id].enabled),
         cooldownUntil: this.store.cooldownUntil(p.id),
         usageToday: usage[p.id] || 0,
+        tokensToday: tokens.today[p.id] || null,
+        tokensWeek: tokens.week[p.id] || null,
         models: this.models(p.id),
       };
     }));
@@ -229,6 +234,10 @@ class Orchestrator {
     if (s.memory && s.memory.trim()) {
       prompt += `(About the user — they asked every assistant to keep this in mind:\n${s.memory.trim().slice(0, 2000)})\n\n`;
     }
+    const learned = (s.learn !== false && Array.isArray(s.learned)) ? s.learned.map((x) => x.text).filter(Boolean) : [];
+    if (learned.length) {
+      prompt += `(What you know about this user from earlier conversations — use it naturally, do not mention it:\n- ${learned.slice(-40).join('\n- ').slice(0, 3000)})\n\n`;
+    }
     if (promptEng) {
       prompt += '(Act as an expert prompt engineer. Write a ready-to-use prompt the user can paste into an AI model or tool: give it a clear role, ' +
         'the goal and context, step-by-step instructions, constraints, the exact output format, and an example if useful. Put the final prompt in ' +
@@ -260,7 +269,7 @@ class Orchestrator {
     while (attempt++ < 4) {
       const outFile = p.needsOutputFile ? path.join(os.tmpdir(), `majlis-${process.pid}-${Date.now()}-${attempt}.txt`) : null;
       const args = p.buildArgs({ model: usedModel, autonomy, outputFile: outFile, optional, resumeId: resume });
-      let streamed = '', final = null, finalIsError = false, sessionId = null;
+      let streamed = '', final = null, finalIsError = false, sessionId = null, usage = null;
       const errors = [];
       const parser = p.createParser((e) => {
         if (e.type === 'text') { streamed += e.text; emit({ type: 'text', text: e.text }); }
@@ -269,6 +278,7 @@ class Orchestrator {
         else if (e.type === 'meta') emit({ type: 'meta', model: e.model });
         else if (e.type === 'session') sessionId = e.id;
         else if (e.type === 'error') errors.push(e.text);
+        else if (e.type === 'usage') usage = { input: (usage ? usage.input : 0) + e.input, output: (usage ? usage.output : 0) + e.output, cached: (usage ? usage.cached : 0) + e.cached };
       });
       // Some CLIs wait for an interactive sign-in when signed out; stop them at once instead.
       const local = new AbortController();
@@ -283,6 +293,11 @@ class Orchestrator {
       });
       if (signal) signal.removeEventListener('abort', onOuter);
       parser.end();
+      // Count what this run cost the subscription. CLIs that report no numbers are estimated from length.
+      if (!authRequired && !(r.cancelled && !streamed && !final)) {
+        const tk = usage || { input: estimateTokens(typeof input === 'string' ? input : JSON.stringify(input)), output: estimateTokens(final || streamed), cached: 0, estimated: true };
+        if (tk.input || tk.output) { this.store.addTokens(providerId, tk); emit({ type: 'tokens', ...tk }); }
+      }
       if (authRequired) {
         if (p.authProbe) this.store.markAuth(p.id, false);
         return { ok: false, failure: { kind: 'auth' }, text: '' };
@@ -397,6 +412,7 @@ class Orchestrator {
           emit: (e) => {
             if (e.type === 'activity') { aiMsg.activity.push(e.text); if (aiMsg.activity.length > 200) aiMsg.activity.shift(); }
             if (e.type === 'text') aiMsg.text += e.text;
+            if (e.type === 'tokens') { const t0 = aiMsg.tokens || { input: 0, output: 0, cached: 0 }; aiMsg.tokens = { input: t0.input + e.input, output: t0.output + e.output, cached: t0.cached + e.cached, estimated: !!(t0.estimated || e.estimated) }; }
             send(e);
           },
         });
@@ -413,6 +429,7 @@ class Orchestrator {
             if (changes && changes.files.length) aiMsg.changes = changes;
           }
           this.store.saveConversation(conv);
+          if (!opts.noLearn) this.learning = this.learnFrom(conv, text, r.text).catch(() => null);
           send({ type: 'done', text: r.text, provider: step.provider, label: p.label, model: r.model, category: plan.category, images: aiMsg.images, changes: aiMsg.changes });
           return aiMsg;
         }
@@ -596,6 +613,45 @@ class Orchestrator {
     return { ok: true, text: r.text.replace(/^```\w*\n?|```$/g, '').replace(/^["“]|["”]$/g, '').trim(), provider: helper.provider };
   }
 
+  /**
+   * Like the memory in the official apps: after a reply, a fast model notes durable facts and preferences
+   * the user revealed (how they like answers, their work, their projects, tools). Shared by every model
+   * through buildPrompt. Cheap: runs only when the message looks personal, or every 8th message.
+   */
+  async learnFrom(conv, userText, replyText) {
+    const s = this.store.getSettings();
+    if (s.learn === false || !userText || userText.length < 8) return null;
+    const userTurns = conv.messages.filter((m) => m.role === 'user').length;
+    const personal = LEARN_CUE_RE.test(userText);
+    if (!personal && userTurns % 8 !== 0) return null;
+    const helper = this.pickHelper([{ provider: 'claude', model: 'haiku' }, { provider: 'gemini', model: '@flash' }, { provider: 'codex', model: '' }]);
+    if (!helper) return null;
+    const known = (s.learned || []).map((x) => `${x.id}: ${x.text}`).join('\n') || '(nothing yet)';
+    const instruction = [
+      'You maintain a short memory about ONE user of an AI assistant, so every future answer fits them better.',
+      'From the latest exchange, extract only DURABLE facts the user stated or clearly showed about themselves: preferred language/dialect and tone, answer length and format they like or dislike, their job and skills, their ongoing projects, tools, platforms and accounts they use, standing instructions ("always…", "never…").',
+      'Do NOT store: one-off task details, things the assistant said, guesses, secrets/passwords/keys, health, religion, politics, finances, or anything sensitive.',
+      'Each fact: one short line, written in the user\'s language, third person (e.g. "يفضّل الردود المختصرة بالعربي").',
+      'If a new fact replaces an old one, remove the old id. If nothing durable, return empty lists.',
+      'Return ONLY JSON: {"add":["..."],"remove":["id"]}',
+      '', 'Already known:', known, '', 'Latest user message:', userText.slice(0, 3000), '', 'Assistant reply (context only):', String(replyText || '').slice(0, 1200),
+    ].join('\n');
+    const r = await this.runOnce(helper.provider, this.resolveModel(helper.provider, helper.model), instruction, { cwd: os.tmpdir(), autonomy: 'safe', timeoutMs: 60000, emit: () => {} });
+    if (!r.ok) return null;
+    const m = /\{[\s\S]*\}/.exec(r.text); if (!m) return null;
+    let j; try { j = JSON.parse(m[0]); } catch (_) { return null; }
+    const remove = new Set((j.remove || []).map(String));
+    let list = (this.store.getSettings().learned || []).filter((x) => !remove.has(x.id));
+    const have = new Set(list.map((x) => x.text.trim()));
+    for (const t of (j.add || []).map((x) => String(x).trim()).filter((x) => x && x.length < 300 && !have.has(x)).slice(0, 5)) {
+      if (SECRET_RE.test(t)) continue;
+      list.push({ id: 'L' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), text: t, ts: Date.now() });
+    }
+    list = list.slice(-60);
+    this.store.updateSettings({ learned: list });
+    return list;
+  }
+
   /** Quick health check for one provider. */
   async test(providerId) {
     const r = await this.runOnce(providerId, '', 'Reply with exactly the word: OK', {
@@ -608,4 +664,11 @@ class Orchestrator {
   }
 }
 
-module.exports = { Orchestrator };
+/** Rough token count when a CLI reports none (~4 chars/token for Latin text, ~2.5 for Arabic). */
+function estimateTokens(text) {
+  const t = String(text || '');
+  const arabic = (t.match(/[\u0600-\u06FF]/g) || []).length;
+  return Math.ceil(arabic / 2.5 + (t.length - arabic) / 4);
+}
+
+module.exports = { Orchestrator, estimateTokens };

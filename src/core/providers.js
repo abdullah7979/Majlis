@@ -85,6 +85,7 @@ const claude = {
           if (c.type === 'tool_use') emit({ type: 'activity', text: describeTool(c.name, c.input) });
         }
       } else if (j.type === 'result') {
+        if (j.usage) emit({ type: 'usage', input: (j.usage.input_tokens || 0) + (j.usage.cache_creation_input_tokens || 0), cached: j.usage.cache_read_input_tokens || 0, output: j.usage.output_tokens || 0 });
         emit({ type: 'final', text: typeof j.result === 'string' ? j.result : '', isError: !!j.is_error || (j.subtype && j.subtype !== 'success') });
       }
     });
@@ -139,6 +140,9 @@ const codex = {
         else if (it.type === 'file_change' && j.type === 'item.completed') emit({ type: 'activity', text: `edit: ${(it.changes || []).map((c) => c.path).join(', ').slice(0, 160)}` });
         else if (it.type === 'web_search' && j.type === 'item.started') emit({ type: 'activity', text: `search: ${it.query || ''}` });
         else if (it.type === 'error' && it.message && !/Falling back|Reconnecting/i.test(it.message)) emit({ type: 'error', text: it.message });
+      } else if (j.type === 'turn.completed' && j.usage) {
+        const u = j.usage, cached = u.cached_input_tokens || 0;
+        emit({ type: 'usage', input: Math.max(0, (u.input_tokens || 0) - cached), cached, output: (u.output_tokens || 0) + (u.reasoning_output_tokens || 0) });
       } else if (j.type === 'turn.failed') emit({ type: 'error', text: (j.error && j.error.message) || 'turn failed' });
       else if (j.type === 'error' && j.message && !/^Reconnecting/i.test(j.message)) emit({ type: 'error', text: j.message });
     });
@@ -203,6 +207,8 @@ const gemini = {
       } else if (j.event === 'result' && j.result) {
         const r = j.result;
         if (r.conversation_id) emit({ type: 'session', id: r.conversation_id });
+        const u = r.usage || j.usage || r.usage_metadata;
+        if (u) emit({ type: 'usage', input: u.input_tokens || u.prompt_token_count || u.promptTokenCount || 0, cached: u.cached_input_tokens || u.cached_content_token_count || 0, output: u.output_tokens || u.candidates_token_count || u.candidatesTokenCount || 0 });
         if (r.status === 'SUCCESS') emit({ type: 'final', text: r.response || '', isError: false });
         else { if (r.error) emit({ type: 'error', text: r.error }); emit({ type: 'final', text: sawText ? '' : (r.response || ''), isError: true }); }
       }

@@ -299,6 +299,8 @@ function updateAiEl(el, m) {
     const foot = h('div', { class: 'msg-foot' },
       h('button', { onclick: (e) => { navigator.clipboard.writeText(m.text); e.target.textContent = t('copied'); setTimeout(() => (e.target.textContent = t('copy')), 1400); } }, t('copy')),
       h('span', {}, '·'), h('span', {}, fmtTime(m.ts)));
+    if (m.tokens) foot.append(h('span', {}, '·'), h('span', { class: 'tok', title: `${t('tok_in')}: ${fmtTok(m.tokens.input)} · ${t('tok_out')}: ${fmtTok(m.tokens.output)} · ${t('tok_cached')}: ${fmtTok(m.tokens.cached)}` },
+      `${m.tokens.estimated ? '≈ ' : ''}${fmtTok(m.tokens.input + m.tokens.output)} ${t('tokens')}`));
     if (m.category === 'prompt') {
       // A written prompt is usually in a code block: save that part (or the whole answer) to the library.
       const block = /```[^\n]*\n([\s\S]*?)```/.exec(m.text || '');
@@ -631,11 +633,17 @@ function usageCard() {
     ids.map((id) => {
       const p = S.providers[id];
       const state = p.cooldownUntil ? `${t('resting_until')} ${fmtTime(p.cooldownUntil)}` : !p.signedIn ? t('needs_signin') : t('ready');
+      const tk = p.tokensToday, wk = p.tokensWeek;
+      const tkText = tk ? `${fmtTok(tk.input + tk.output)} ${t('tokens')}` : '—';
+      const tkTitle = tk ? `${t('tok_in')}: ${fmtTok(tk.input)} · ${t('tok_out')}: ${fmtTok(tk.output)} · ${t('tok_cached')}: ${fmtTok(tk.cached)}${tk.estimated ? ` · ${t('tok_estimated')}` : ''}${wk ? `\n${t('tok_week')}: ${fmtTok(wk.input + wk.output)}` : ''}` : '';
       return h('div', { class: 'urow' }, h('span', { class: 'uname' }, p.label),
         h('div', { class: 'ubar' }, h('i', { class: id, style: `width:${Math.round((p.usageToday / max) * 100)}%` })),
-        h('span', { class: 'ucount' }, `${p.usageToday}`), h('span', { class: `ustate ${p.cooldownUntil ? 'warn' : !p.signedIn ? 'bad' : 'ok'}` }, state));
-    }));
+        h('span', { class: 'ucount' }, `${p.usageToday}`), h('span', { class: 'utok', title: tkTitle }, tkText),
+        h('span', { class: `ustate ${p.cooldownUntil ? 'warn' : !p.signedIn ? 'bad' : 'ok'}` }, state));
+    }),
+    h('p', { class: 'help', style: 'margin:10px 0 0' }, t('tok_note')));
 }
+function fmtTok(n) { n = n || 0; return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n); }
 
 function modelOptions(provider, selected) {
   const p = S.providers[provider];
@@ -689,6 +697,18 @@ function paneGeneral(pane) {
   mem.value = s.memory || '';
   mem.onchange = () => saveSettings({ memory: mem.value });
   pane.append(h('h2', {}, t('memory_title')), h('p', { class: 'help' }, t('memory_help')), h('div', { class: 'card' }, mem));
+  const learnedBox = h('div', { class: 'learned' });
+  const drawLearned = () => {
+    learnedBox.innerHTML = '';
+    const list = S.settings.learned || [];
+    if (!list.length) learnedBox.append(h('p', { class: 'help', style: 'margin:0' }, t('learned_none')));
+    for (const x of list) learnedBox.append(h('div', { class: 'lrow' }, h('span', { dir: 'auto' }, x.text),
+      h('button', { class: 'link', title: t('delete'), onclick: async () => { await saveSettings({ learned: (S.settings.learned || []).filter((y) => y.id !== x.id) }); drawLearned(); } }, '✕')));
+    if (list.length) learnedBox.append(h('button', { class: 'btn danger', style: 'margin-top:10px', onclick: async () => { if (confirm(t('learned_clear_q'))) { await saveSettings({ learned: [] }); drawLearned(); } } }, t('learned_clear')));
+  };
+  drawLearned();
+  pane.append(h('h2', { style: 'margin-top:22px' }, t('learned_title')), h('p', { class: 'help' }, t('learned_help')),
+    h('div', { class: 'card' }, field(t('learn_on'), toggle(s.learn !== false, (v) => saveSettings({ learn: v }))), learnedBox));
   pane.append(h('h2', { style: 'margin-top:22px' }, t('tab_general')), h('div', { class: 'card' },
     field(t('language'), lang),
     field(t('smart_routing'), toggle(s.smartRouting, (v) => saveSettings({ smartRouting: v })), t('smart_routing_help')),
@@ -866,7 +886,13 @@ async function paneApi(pane) {
       field(t('api_port'), h('input', { type: 'number', min: 1024, max: 65535, value: a.port || 4891, onchange: (e) => apply({ port: Math.max(1024, Math.min(65535, Number(e.target.value) || 4891)) }) })),
       field(t('api_lan'), toggle(!!a.allowLan, (v) => apply({ allowLan: v })), t('api_lan_help')),
       field(t('api_autonomy'), autonomy),
-      field(t('api_models'), h('code', { dir: 'ltr' }, 'majlis-auto · majlis-council · claude:opus'), t('api_models_help'))),
+      field(t('api_models'), h('code', { dir: 'ltr' }, 'majlis-auto · majlis-council · claude:opus'), t('api_models_help')),
+      field(t('api_test'), (() => { const out = h('span', { class: 'help', style: 'margin:0' }); const b = h('button', { class: 'btn', onclick: async () => {
+        b.disabled = true; out.textContent = '…';
+        const r = await api.api.selftest(); b.disabled = false;
+        out.textContent = r.ok ? `✓ ${t('api_test_ok')} (${r.models} ${t('api_models_count')}, ${r.ms}ms)` : `✖ ${r.error}`;
+        out.style.color = r.ok ? 'var(--ok)' : 'var(--bad)';
+      } }, t('api_test_btn')); return h('div', { style: 'display:flex;gap:10px;align-items:center' }, b, out); })())),
     h('h2', { style: 'margin-top:22px' }, t('api_examples')),
     h('div', { class: 'card' }, ex('Python (openai)', py), ex('curl', curl), ex('n8n / Make / Zapier', n8n)));
 }
