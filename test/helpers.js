@@ -20,6 +20,7 @@ function installFakeClis() {
   const key = Object.keys(process.env).find((k) => k.toLowerCase() === 'path') || 'PATH';
   process.env[key] = bin + path.delimiter + process.env[key];
   const log = path.join(bin, 'calls.jsonl');
+  process.env.CODEX_HOME = path.join(bin, 'codex-home'); // keep generated images away from the real home folder
   process.env.FAKE_LOG = log;
   return {
     bin,

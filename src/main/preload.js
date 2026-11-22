@@ -18,7 +18,7 @@ contextBridge.exposeInMainWorld('majlis', {
 
   settings: { get: invoke('settings:get'), set: invoke('settings:set'), resetRoutes: invoke('settings:reset-routes') },
   conv: { list: invoke('conv:list'), get: invoke('conv:get'), create: invoke('conv:create'), remove: invoke('conv:delete'), update: invoke('conv:update') },
-  chat: { send: invoke('chat:send'), cancel: invoke('chat:cancel'), feedback: invoke('chat:feedback'), onEvent: on('chat:event') },
+  chat: { send: invoke('chat:send'), council: invoke('chat:council'), undo: invoke('chat:undo'), cancel: invoke('chat:cancel'), feedback: invoke('chat:feedback'), onEvent: on('chat:event') },
   providers: {
     status: invoke('providers:status'), test: invoke('providers:test'), refreshModels: invoke('providers:refresh-models'), login: invoke('providers:login'),
     install: invoke('providers:install'), clearCooldown: invoke('providers:clear-cooldown'), onInstallLog: on('providers:install-log'),

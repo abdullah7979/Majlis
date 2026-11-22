@@ -9,6 +9,12 @@ const { run, which, searchedDirs, augmentedEnv } = require('./shell');
 const { PROVIDERS, credentialsPresent } = require('./providers');
 const { classifyFailure, looksLikeLimitNotice } = require('./errors');
 const { heuristicClassify, buildClassifierPrompt, parseClassifierOutput } = require('./classifier');
+const { COUNCIL_MEMBERS } = require('./defaults');
+const { Snapshots } = require('./snapshots');
+
+// Short replies that continue the current task rather than start a new one.
+const FOLLOW_UP_RE = /^\s*(نعم|ايوه|إيوه|أيوه|ايه|إيه|اي|أي|اوكي|أوكي|تمام|طيب|زين|حلو|ممتاز|كمل|كمّل|استمر|كمله|كملها|كمّلها|زد|زيد|أكثر|اكثر|عدل|عدّل|عدلها|عدّلها|غيره|غيّره|غيرها|سو|سوه|سوّه|سوها|سويها|ابدأ|ابدا|يلا|نفذ|نفّذ|طبق|طبّق|جرب|جرّب|صحح|صلحها|صلّحها|لا|ok|okay|yes|yep|sure|continue|go on|go ahead|do it|more|again|retry|fix it|no)(?=$|[\s.,!؟?،])/i;
+const IMAGE_EXT = /\.(png|jpe?g|webp|gif)$/i;
 
 const MAX_MSG_CHARS = 8000;
 const MAX_CONTEXT_CHARS = 60000;
@@ -19,6 +25,7 @@ class Orchestrator {
   /** @param {import('./store').Store} store */
   constructor(store, { providers = PROVIDERS } = {}) {
     this.store = store;
+    this.snapshots = new Snapshots(store.dir);
     this.providers = providers;
     this.active = new Map(); // conversationId -> AbortController
     this.catalogLoading = null;
@@ -146,9 +153,40 @@ class Orchestrator {
   routeFor(category) {
     const s = this.store.getSettings();
     const route = (s.routes[category] || s.routes.quick || []).filter((r) => this.providers[r.provider]);
-    return route.map((r, i) => ({ r, i, sc: this.store.learningScore(category, r.provider) }))
+    const ordered = route.map((r, i) => ({ r, i, sc: this.store.learningScore(category, r.provider) }))
       .sort((a, b) => (Math.abs(b.sc - a.sc) >= 3 ? b.sc - a.sc : a.i - b.i))
       .map((x) => x.r);
+    return s.balance === false || category === 'code_heavy' || category === 'image' ? ordered : this.balance(ordered);
+  }
+
+  /**
+   * Share everyday work: if the first choice has been used much more today than the second
+   * (and both are ready), swap them so no single subscription runs out early.
+   */
+  balance(route) {
+    const ready = route.filter((r) => this.isReady(r.provider));
+    if (ready.length < 2 || ready[0].provider === ready[1].provider) return route;
+    const usage = this.store.usageToday();
+    const a = usage[ready[0].provider] || 0, b = usage[ready[1].provider] || 0;
+    if (a < b * 2 + 6) return route;
+    const out = route.slice();
+    const i = out.indexOf(ready[0]), j = out.indexOf(ready[1]);
+    [out[i], out[j]] = [out[j], out[i]];
+    out.balanced = true;
+    return out;
+  }
+
+  /** The last finished answer, if this message just continues it ("yes", "continue", "fix it"...). */
+  followUpOf(conv, text, heuristic) {
+    const s = this.store.getSettings();
+    if (s.continuity === false) return null;
+    const prev = [...conv.messages].reverse().find((m) => m.role === 'assistant');
+    if (!prev || prev.status !== 'done' || !prev.provider) return null;
+    if (Date.now() - (prev.ts || 0) > 6 * 3600e3) return null;
+    const t = text.trim();
+    if (FOLLOW_UP_RE.test(t) && t.length < 160) return prev;
+    if (t.length <= 30 && !(heuristic && heuristic.confident)) return prev;
+    return null;
   }
 
   coolDown(provider, resetAt) {
@@ -164,7 +202,7 @@ class Orchestrator {
    * Build the prompt. With `since` (index into conv.messages) only the turns after that point are
    * included — used when resuming the provider's own session, which already remembers the rest.
    */
-  buildPrompt(conv, text, attachments, { voice = false, since = null } = {}) {
+  buildPrompt(conv, text, attachments, { voice = false, since = null, image = false } = {}) {
     const s = this.store.getSettings();
     const done = (m) => m.text && (m.role === 'user' || m.status === 'done');
     let prior = since == null ? conv.messages.filter(done).slice(-s.historyTurns * 2) : conv.messages.slice(since).filter(done);
@@ -188,6 +226,13 @@ class Orchestrator {
       prompt += ctx + '---\n\n';
     }
     if (attachments.length) prompt += 'The user attached these files (read them from disk):\n' + attachments.map((a) => `- ${a}`).join('\n') + '\n\n';
+    if (s.memory && s.memory.trim()) {
+      prompt += `(About the user — they asked every assistant to keep this in mind:\n${s.memory.trim().slice(0, 2000)})\n\n`;
+    }
+    if (image) {
+      prompt += '(The user wants a real image. Use your built-in image generation tool to create it — not a text description — ' +
+        'and save the final image file(s) in the current working folder. Then reply with one or two short sentences about what you made.)\n\n';
+    }
     if (voice) {
       prompt += '(The user is talking to you by voice — this message is a speech transcript and your answer will be read aloud. ' +
         'Reply the way you would in a natural spoken conversation, in the same language and dialect the user used. ' +
@@ -281,7 +326,6 @@ class Orchestrator {
     fs.mkdirSync(cwd, { recursive: true });
     conv.sessions = conv.sessions || {};
 
-    const freshPrompt = this.buildPrompt(conv, text, attachments, { voice });
     const userMsg = { id: this.store.newId(), role: 'user', text, attachments, voice: !!voice, ts: Date.now() };
     const aiMsg = { id: this.store.newId(), role: 'assistant', text: '', status: 'running', ts: Date.now(), trail: [], activity: [] };
     const priorCount = conv.messages.length;
@@ -293,14 +337,28 @@ class Orchestrator {
 
     try {
       let plan;
+      const h = heuristicClassify(text, { attachments });
+      const prev = !force ? this.followUpOf({ messages: conv.messages.slice(0, priorCount) }, text, h) : null;
       if (force) {
         const [provider, model = ''] = force.split('|');
         plan = { category: 'manual', reason: 'manual', source: 'manual', route: [{ provider, model }] };
+      } else if (prev) {
+        // Keep going with the model that is doing this task.
+        const category = prev.category && prev.category !== 'manual' ? prev.category : 'quick';
+        const rest = this.routeFor(category).filter((r) => r.provider !== prev.provider);
+        plan = { category, reason: 'follow-up', source: 'continue', route: [{ provider: prev.provider, model: prev.model || '' }, ...rest] };
       } else {
         send({ type: 'status', key: 'classifying' });
         const c = await this.classify(text, { attachments, smart, signal: controller.signal });
-        plan = { ...c, route: this.routeFor(c.category) };
+        const route = this.routeFor(c.category);
+        plan = { ...c, route, source: route.balanced ? 'balanced' : c.source };
       }
+      const image = plan.category === 'image';
+      const freshPrompt = this.buildPrompt(conv, text, attachments, { voice, image });
+      const autonomy = image && s.autonomy === 'safe' ? 'edit' : s.autonomy;
+      const started = Date.now();
+      const snapBase = s.snapshots !== false && conv.workspace && cwd === conv.workspace && autonomy !== 'safe'
+        ? await this.snapshots.before(conversationId, cwd) : null;
       Object.assign(aiMsg, { category: plan.category, reason: plan.reason, routeSource: plan.source });
       send({ type: 'plan', category: plan.category, reason: plan.reason, source: plan.source, route: plan.route });
 
@@ -323,11 +381,11 @@ class Orchestrator {
         // faster, and it remembers its own tool use. Turns from other models are passed along.
         const sess = conv.sessions[step.provider];
         const canResume = sess && sess.id && (sess.model || '') === (model || '') && sess.count <= priorCount;
-        const prompt = canResume ? this.buildPrompt(conv, text, attachments, { voice, since: sess.count }) : freshPrompt;
+        const prompt = canResume ? this.buildPrompt(conv, text, attachments, { voice, image, since: sess.count }) : freshPrompt;
         send({ type: 'start', provider: step.provider, label: p.label, model, resumed: !!canResume });
         aiMsg.text = '';
         const r = await this.runOnce(step.provider, model, prompt, {
-          cwd, autonomy: s.autonomy, timeoutMs: s.timeoutMinutes * 60e3, signal: controller.signal,
+          cwd, autonomy, timeoutMs: s.timeoutMinutes * 60e3, signal: controller.signal,
           resumeId: canResume ? sess.id : null, freshPrompt,
           emit: (e) => {
             if (e.type === 'activity') { aiMsg.activity.push(e.text); if (aiMsg.activity.length > 200) aiMsg.activity.shift(); }
@@ -341,8 +399,14 @@ class Orchestrator {
           Object.assign(aiMsg, { text: r.text, status: 'done', provider: step.provider, providerLabel: p.label, model: r.model });
           aiMsg.trail.push({ provider: step.provider, model: r.model, outcome: 'ok' });
           if (r.sessionId) conv.sessions[step.provider] = { id: r.sessionId, model: r.model || '', count: conv.messages.length };
+          const images = this.collectImages(conversationId, cwd, started);
+          if (images.length) aiMsg.images = images;
+          if (snapBase) {
+            const changes = await this.snapshots.after(conversationId, cwd, snapBase);
+            if (changes && changes.files.length) aiMsg.changes = changes;
+          }
           this.store.saveConversation(conv);
-          send({ type: 'done', text: r.text, provider: step.provider, label: p.label, model: r.model, category: plan.category });
+          send({ type: 'done', text: r.text, provider: step.provider, label: p.label, model: r.model, category: plan.category, images: aiMsg.images, changes: aiMsg.changes });
           return aiMsg;
         }
         const f = r.failure;
@@ -368,6 +432,139 @@ class Orchestrator {
     } finally {
       this.active.delete(conversationId);
     }
+  }
+
+  /**
+   * Images created during this answer: in the working folder, or where the CLIs keep generated images
+   * (Codex: ~/.codex/generated_images). Copied next to the conversation so they stay with it.
+   */
+  collectImages(conversationId, cwd, since) {
+    const found = [];
+    const scan = (dir, depth) => {
+      let entries = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+      for (const e of entries) {
+        if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+        const f = path.join(dir, e.name);
+        if (e.isDirectory()) { if (depth > 0) scan(f, depth - 1); continue; }
+        if (!IMAGE_EXT.test(e.name)) continue;
+        try { const st = fs.statSync(f); if (st.mtimeMs >= since - 1000 && st.size > 100) found.push(f); } catch (_) {}
+      }
+    };
+    scan(cwd, 2);
+    const codexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
+    scan(path.join(codexHome, 'generated_images'), 3);
+    const keep = this.store.attachmentDir(conversationId);
+    return [...new Set(found)].slice(0, 12).map((f) => {
+      if (f.startsWith(keep) || f.startsWith(cwd)) return f;
+      try { const [copy] = this.store.importAttachments(conversationId, [f]); return copy; } catch (_) { return f; }
+    });
+  }
+
+  /** Undo the file changes recorded for one answer. */
+  async undoChanges(conversationId, messageId) {
+    const conv = this.store.getConversation(conversationId);
+    const m = conv && conv.messages.find((x) => x.id === messageId);
+    if (!m || !m.changes || !conv.workspace) return { ok: false };
+    const r = await this.snapshots.undo(conversationId, conv.workspace, m.changes);
+    m.changes.undone = r.ok;
+    this.store.saveConversation(conv);
+    return r;
+  }
+
+  /**
+   * Council mode: the strongest model of every ready subscription answers the same question at once;
+   * then one of them, as chair, writes the single best final answer from all of them.
+   */
+  async council(opts, emit) {
+    const { conversationId, text, voice = false } = opts;
+    const conv = this.store.getConversation(conversationId);
+    if (!conv) throw new Error('conversation not found');
+    if (this.active.has(conversationId)) throw new Error('busy');
+    const members = COUNCIL_MEMBERS.filter((m) => this.isReady(m.provider))
+      .map((m) => ({ ...m, model: this.resolveModel(m.provider, m.model) }));
+    if (members.length < 2) return this.send(opts, emit);
+
+    const controller = new AbortController();
+    this.active.set(conversationId, controller);
+    const s = this.store.getSettings();
+    const attachments = opts.attachments || [];
+    const cwd = conv.workspace && fs.existsSync(conv.workspace) ? conv.workspace : this.store.attachmentDir(conversationId);
+    fs.mkdirSync(cwd, { recursive: true });
+    const prompt = this.buildPrompt(conv, text, attachments, { voice });
+    const userMsg = { id: this.store.newId(), role: 'user', text, attachments, voice: !!voice, council: true, ts: Date.now() };
+    const aiMsg = { id: this.store.newId(), role: 'assistant', text: '', status: 'running', ts: Date.now(), trail: [], activity: [], council: [], category: 'council', routeSource: 'council' };
+    conv.messages.push(userMsg, aiMsg);
+    if (!conv.title) conv.title = text.replace(/\s+/g, ' ').slice(0, 60);
+    this.store.saveConversation(conv);
+    const send = (e) => emit({ conversationId, messageId: aiMsg.id, ...e });
+    send({ type: 'begin', userMessage: userMsg, aiMessage: aiMsg });
+    send({ type: 'plan', category: 'council', source: 'council', route: members });
+
+    try {
+      const results = await Promise.all(members.map(async (m) => {
+        const p = this.providers[m.provider];
+        send({ type: 'council-start', provider: m.provider, label: p.label, model: m.model });
+        const r = await this.runOnce(m.provider, m.model, prompt, {
+          cwd, autonomy: 'safe', timeoutMs: s.timeoutMinutes * 60e3, signal: controller.signal,
+          emit: (e) => { if (e.type === 'activity') send({ type: 'council-activity', provider: m.provider, text: e.text }); },
+        });
+        if (r.ok) { this.store.countUsage(m.provider); if (!this.store.authKnownGood(m.provider)) this.store.markAuth(m.provider, true); }
+        else if (r.failure.kind === 'limit') this.coolDown(m.provider, r.failure.resetAt);
+        const entry = { provider: m.provider, label: p.label, model: r.ok ? r.model : m.model, ok: r.ok, text: r.ok ? r.text : '', kind: r.ok ? 'ok' : r.failure.kind, message: r.ok ? '' : r.failure.message };
+        aiMsg.council.push(entry);
+        send({ type: 'council-member', ...entry });
+        return entry;
+      }));
+      if (controller.signal.aborted) throw Object.assign(new Error('cancelled'), { cancelled: true });
+      const good = results.filter((r) => r.ok);
+      if (!good.length) {
+        aiMsg.status = 'failed';
+        aiMsg.trail = results.map((r) => ({ provider: r.provider, model: r.model, outcome: r.kind, message: r.message }));
+        this.store.saveConversation(conv);
+        send({ type: 'failed', trail: aiMsg.trail });
+        return aiMsg;
+      }
+      let final = good[0], chair = good[0];
+      if (good.length > 1) {
+        chair = good.find((g) => g.provider === 'claude') || good[0];
+        send({ type: 'status', key: 'council_merging' });
+        const merged = await this.runOnce(chair.provider, chair.model, this.councilPrompt(text, good), {
+          cwd, autonomy: 'safe', timeoutMs: s.timeoutMinutes * 60e3, signal: controller.signal,
+          emit: (e) => { if (e.type === 'text') { aiMsg.text += e.text; send(e); } },
+        });
+        if (merged.ok) final = { ...chair, text: merged.text };
+      }
+      Object.assign(aiMsg, { text: final.text, status: 'done', provider: chair.provider, providerLabel: chair.label, model: chair.model });
+      this.store.saveConversation(conv);
+      send({ type: 'done', text: aiMsg.text, provider: chair.provider, label: chair.label, model: chair.model, category: 'council', council: aiMsg.council });
+      return aiMsg;
+    } catch (e) {
+      const cancelled = controller.signal.aborted;
+      aiMsg.status = cancelled ? 'cancelled' : 'failed';
+      if (!cancelled) aiMsg.error = String(e.message || e);
+      this.store.saveConversation(conv);
+      send({ type: cancelled ? 'cancelled' : 'failed', error: aiMsg.error, trail: aiMsg.trail });
+      return aiMsg;
+    } finally {
+      this.active.delete(conversationId);
+    }
+  }
+
+  councilPrompt(question, answers) {
+    const arabic = /[\u0600-\u06FF]/.test(question);
+    return [
+      'You chair "Majlis", a council of AI assistants. Several assistants answered the same request independently.',
+      'Write the single best final answer for the user: keep the strongest and most correct points from each, fix any mistakes,',
+      'and if they genuinely disagree on something important, say so in one short line with your judgement.',
+      'Do not list the assistants or describe this process; just give the answer.',
+      arabic ? 'Write the answer in Arabic, in the same dialect and tone the user uses (keep code and technical names as they are).' : 'Write in the language of the request.',
+      '',
+      '### USER REQUEST',
+      question,
+      '',
+      ...answers.map((a, i) => `### ANSWER ${i + 1} (${a.label})\n${a.text.slice(0, 12000)}\n`),
+    ].join('\n');
   }
 
   /** Quick health check for one provider. */

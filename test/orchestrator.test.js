@@ -316,3 +316,111 @@ test('after signing in to Antigravity, the next status check notices it', async 
   assert.equal(store.state.auth.gemini.ok, true);
   assert.equal((await orch.providerStatus()).gemini.signedIn, true);
 });
+
+// ------------------------------------------------------------------ v0.5 features
+test('continuity: "نعم" after an image request stays with the same model and task', async () => {
+  const { orch, conv } = await setup();
+  const first = await send(orch, conv, 'صمم لي شعار لمقهى');
+  assert.equal(first.msg.category, 'image');
+  fake.reset();
+  const { msg } = await send(orch, conv, 'نعم');
+  assert.equal(msg.routeSource, 'continue');
+  assert.equal(msg.category, 'image');
+  assert.equal(msg.provider, first.msg.provider);
+  assert.ok(!fake.calls().some((c) => c.input.includes('You are a router')));
+});
+
+test('continuity does not trap a clearly new topic', async () => {
+  const { orch, conv } = await setup();
+  await send(orch, conv, 'صمم لي شعار لمقهى');
+  const { msg } = await send(orch, conv, 'refactor the entire codebase to TypeScript with tests');
+  assert.equal(msg.category, 'code_heavy');
+  assert.equal(msg.provider, 'claude');
+});
+
+test('fair balancing: a heavily used subscription hands everyday work to the next one', async () => {
+  const { orch, conv, store } = await setup();
+  const day = new Date().toISOString().slice(0, 10);
+  store.state.usage[day] = { claude: 30, codex: 3 };
+  const { msg } = await send(orch, conv, 'fix this python bug: KeyError in my function');
+  assert.equal(msg.provider, 'codex');
+  assert.equal(msg.routeSource, 'balanced');
+  // heavy coding keeps the strongest model regardless
+  const heavy = await send(orch, store.createConversation(), 'refactor the entire codebase to TypeScript');
+  assert.equal(heavy.msg.provider, 'claude');
+});
+
+test('memory: the user\'s saved notes reach every model', async () => {
+  const { orch, conv } = await setup({ memory: 'اسمي عبدالله، أشتغل على تطبيق مصروف ذكي بـ Kotlin' });
+  await send(orch, conv, 'hello', { force: 'codex|' });
+  assert.match(callsOf('codex')[0].input, /اسمي عبدالله/);
+});
+
+test('images: generated image files are collected and shown with the answer', async () => {
+  const { orch, conv } = await setup();
+  const { msg } = await send(orch, conv, 'صمم لي شعار لمقهى');
+  assert.equal(msg.provider, 'gemini');
+  assert.match(callsOf('agy')[0].input, /wants a real image/);
+  assert.equal(msg.images.length, 1);
+  assert.ok(fs.existsSync(msg.images[0]));
+});
+
+test('images from ChatGPT (~/.codex/generated_images) are copied into the conversation', async () => {
+  const { orch, conv, store } = await setup();
+  const { msg } = await send(orch, conv, 'ارسم لي صورة قطة', { force: 'codex|' });
+  assert.equal(msg.category, 'manual');
+  // forced: no image instruction; ask through routing instead
+  const r = await send(orch, store.createConversation(), 'design a logo for my bakery', { force: undefined });
+  assert.ok(r.msg.images && r.msg.images.length >= 1);
+  process.env.FAKE_MODE_agy = 'limit';
+  const c = store.createConversation();
+  const r2 = await send(orch, c, 'design a poster for my gym');
+  assert.equal(r2.msg.provider, 'codex');
+  assert.equal(r2.msg.images.length, 1);
+  assert.ok(r2.msg.images[0].startsWith(store.attachmentDir(c.id)));
+});
+
+test('project changes are listed and can be undone', async (t) => {
+  const { which } = require('../src/core/shell');
+  if (!(await which('git'))) return t.skip('git not installed');
+  const ws = tempDir();
+  fs.writeFileSync(path.join(ws, 'a.txt'), 'original');
+  const { orch, conv, store } = await setup();
+  conv.workspace = ws; store.saveConversation(conv);
+  const { msg } = await send(orch, conv, 'EDIT_FILES please', { force: 'claude|' });
+  assert.equal(msg.status, 'done');
+  const files = Object.fromEntries(msg.changes.files.map((f) => [f.path, f.status]));
+  assert.deepEqual(files, { 'a.txt': 'M', 'new.txt': 'A' });
+  const r = await orch.undoChanges(conv.id, msg.id);
+  assert.equal(r.ok, true);
+  assert.equal(fs.readFileSync(path.join(ws, 'a.txt'), 'utf8'), 'original');
+  assert.ok(!fs.existsSync(path.join(ws, 'new.txt')));
+  assert.ok(!fs.existsSync(path.join(ws, '.git')), 'the project folder itself must not get a .git');
+});
+
+test('council: all three answer in parallel, Claude chairs and merges', async () => {
+  const { orch, conv } = await setup();
+  const events = [];
+  const msg = await orch.council({ conversationId: conv.id, text: 'وش أفضل لغة برمجة للمبتدئين؟' }, (e) => events.push(e));
+  assert.equal(msg.status, 'done', JSON.stringify(msg));
+  assert.equal(msg.category, 'council');
+  assert.equal(msg.council.length, 3);
+  assert.ok(msg.council.every((m) => m.ok));
+  const merge = fake.calls().filter((c) => c.input.includes('You chair "Majlis"'));
+  assert.equal(merge.length, 1);
+  assert.equal(merge[0].name, 'claude');
+  assert.match(merge[0].input, /ANSWER 1/); assert.match(merge[0].input, /ANSWER 3/);
+  assert.match(merge[0].input, /Write the answer in Arabic/);
+  assert.equal(events.filter((e) => e.type === 'council-member').length, 3);
+  // members run read-only so they never edit the same files at once
+  assert.ok(callsOf('claude')[0].args.includes('plan'));
+});
+
+test('council still answers when one member is out of quota', async () => {
+  const { orch, conv } = await setup();
+  process.env.FAKE_MODE_codex = 'limit';
+  const msg = await orch.council({ conversationId: conv.id, text: 'compare React and Vue' }, () => {});
+  assert.equal(msg.status, 'done');
+  assert.equal(msg.council.filter((m) => m.ok).length, 2);
+  assert.equal(msg.council.find((m) => m.provider === 'codex').kind, 'limit');
+});

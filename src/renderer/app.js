@@ -228,6 +228,39 @@ function trailEl(m) {
   });
   return box;
 }
+const fileUrl = (p) => 'file:///' + String(p).replace(/\\/g, '/').replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/').replace(/^([A-Za-z])%3A/, '$1:');
+function imagesEl(images) {
+  return h('div', { class: 'gallery' }, images.map((p) => h('figure', {},
+    h('img', { src: fileUrl(p), alt: '', onclick: () => api.shell.openPath(p), title: t('open_image') }),
+    h('figcaption', {}, h('button', { onclick: () => api.shell.openPath(p) }, t('open_image')), h('span', {}, baseName(p))))));
+}
+function changesEl(m) {
+  const c = m.changes;
+  const label = { A: t('ch_added'), M: t('ch_modified'), D: t('ch_deleted') };
+  const box = h('details', { class: 'changes', open: c.files.length <= 6 },
+    h('summary', {}, `📝 ${t('ch_title')} (${c.files.length})`, c.undone ? h('span', { class: 'tag mute' }, t('ch_undone')) : null),
+    h('ul', {}, c.files.slice(0, 200).map((f) => h('li', {}, h('span', { class: `chs ${f.status}` }, label[f.status] || f.status), h('code', { dir: 'ltr' }, f.path)))));
+  if (!c.undone) {
+    box.append(h('button', { class: 'btn undo', onclick: async (e) => {
+      if (!window.confirm(t('ch_confirm'))) return;
+      e.target.disabled = true;
+      const r = await api.chat.undo({ conversationId: S.conv.id, messageId: m.id });
+      if (r && r.ok) { c.undone = true; toast(t('ch_done')); } else toast(t('ch_failed'));
+      const el = $(`.msg.ai[data-id="${m.id}"]`); if (el) updateAiEl(el, m);
+    } }, `↶ ${t('ch_undo')}`));
+  }
+  return box;
+}
+function councilEl(m) {
+  const st = (x) => (x.ok ? '✓' : x.kind === 'running' ? '…' : '✖');
+  return h('details', { class: 'council' },
+    h('summary', {}, `🏛 ${t('council_views')} — ${m.council.map((x) => `${x.label} ${st(x)}`).join(' · ')}`),
+    m.council.map((x) => {
+      const body = h('div', { class: 'body' });
+      if (x.ok) renderMarkdown(body, x.text); else body.textContent = x.kind === 'running' ? t('working') + '…' : `✖ ${t(x.kind === 'limit' ? 'out_limit' : x.kind === 'auth' ? 'signed_out' : 'failed')}`;
+      return h('div', { class: 'member' }, h('div', { class: 'mhead' }, h('div', { class: `avatar ${x.provider}` }, INITIAL[x.provider]), h('b', {}, modelLabel(x.provider, x.model))), body);
+    }));
+}
 function updateAiEl(el, m) {
   const live = m.status === 'running';
   const prov = m.provider || m.liveProvider;
@@ -237,7 +270,7 @@ function updateAiEl(el, m) {
     h('div', { class: `avatar ${prov || 'pending'}` }, prov ? INITIAL[prov] : '✦'),
     h('span', { class: 'who' }, prov ? modelLabel(prov, model) : 'Majlis'),
     m.category ? h('span', { class: 'tag' }, t(`cat_${m.category}`)) : null,
-    m.routeSource && m.category !== 'manual' ? h('span', { class: 'tag mute', title: m.reason || '' }, t(m.routeSource)) : null);
+    m.routeSource && m.category !== 'manual' && m.category !== 'council' ? h('span', { class: 'tag mute', title: m.reason || '' }, t(`src_${m.routeSource}`)) : null);
   el.append(head);
   const tr = trailEl(m); if (tr) el.append(tr);
   if (m.notice) el.append(h('div', { class: 'status-line' }, 'ⓘ ', m.notice));
@@ -255,6 +288,9 @@ function updateAiEl(el, m) {
     renderMarkdown(body, m.text);
     el.append(body);
   }
+  if (m.images && m.images.length) el.append(imagesEl(m.images));
+  if (m.changes && m.changes.files && m.changes.files.length) el.append(changesEl(m));
+  if (m.council && m.council.length) el.append(councilEl(m));
   if (m.status === 'failed') {
     el.append(h('div', { class: 'notice' }, m.error || t('all_failed'), h('button', { onclick: () => openSettings('providers') }, t('open_settings'))));
   }
@@ -263,7 +299,7 @@ function updateAiEl(el, m) {
     const foot = h('div', { class: 'msg-foot' },
       h('button', { onclick: (e) => { navigator.clipboard.writeText(m.text); e.target.textContent = t('copied'); setTimeout(() => (e.target.textContent = t('copy')), 1400); } }, t('copy')),
       h('span', {}, '·'), h('span', {}, fmtTime(m.ts)));
-    if (m.category && m.category !== 'manual') {
+    if (m.category && m.category !== 'manual' && m.category !== 'council') {
       foot.append(h('span', { class: 'grow' }), h('span', {}, m.feedback ? t('thanks') : t('was_good')));
       for (const [sym, good] of [['👍', true], ['👎', false]]) {
         foot.append(h('button', { class: (m.feedback === 1 && good) || (m.feedback === -1 && !good) ? 'on' : '', onclick: async () => {
@@ -315,7 +351,10 @@ function onChatEvent(e) {
     case 'retry': if (e.reason === 'bad_model') m.notice = t('retry_model'); break;
     case 'skip': (m.trail = m.trail || []).push({ provider: e.provider, model: e.model, outcome: e.why, until: e.until }); break;
     case 'fallback': (m.trail = m.trail || []).push({ provider: e.provider, model: m.liveModel, outcome: e.kind, until: e.until, message: e.message }); m.text = ''; break;
-    case 'done': Object.assign(m, { status: 'done', text: e.text, provider: e.provider, model: e.model, providerLabel: e.label }); break;
+    case 'done': Object.assign(m, { status: 'done', text: e.text, provider: e.provider, model: e.model, providerLabel: e.label, images: e.images || m.images, changes: e.changes || m.changes, council: e.council || m.council }); break;
+    case 'council-start': (m.council = m.council || []).push({ provider: e.provider, label: e.label, model: e.model, kind: 'running', ok: false }); m.statusText = t('council_thinking'); break;
+    case 'council-member': { m.council = m.council || []; const i = m.council.findIndex((x) => x.provider === e.provider); const v = { ...e }; delete v.type; if (i >= 0) m.council[i] = v; else m.council.push(v); break; }
+    case 'council-activity': (m.activity = m.activity || []).push(`${providerLabel(e.provider)} · ${e.text}`); break;
     case 'failed': Object.assign(m, { status: 'failed', error: e.error || null }); break;
     case 'cancelled': m.status = 'cancelled'; break;
     default: break;
@@ -351,7 +390,8 @@ async function sendCurrent({ voice = false } = {}) {
   const force = $('#modelPick').value === 'auto' ? null : $('#modelPick').value;
   S.running.add(conv.id); updateSendButton();
   if (voice) V.awaiting = conv.id;
-  await api.chat.send({ conversationId: conv.id, text, files, force, voice });
+  if (S.councilOn && !force) await api.chat.council({ conversationId: conv.id, text, files, voice });
+  else await api.chat.send({ conversationId: conv.id, text, files, force, voice });
 }
 
 // ------------------------------------------------------------------ voice
@@ -523,6 +563,7 @@ function providerCard(id, { onChange } = {}) {
         h('div', { class: 'sub' }, state, p.version ? h('span', {}, `${t('version')} ${p.version}`) : null, p.installed ? h('span', {}, `${p.usageToday} ${t('requests_today')}`) : null)),
       acts);
     if (extra.hint) card.append(h('div', { class: 'hint' }, extra.hint));
+    if (extra.progress != null) card.append(h('div', { class: 'pbar' }, h('i', { style: `width:${extra.progress}%` })));
     if (extra.result) card.append(h('div', { class: 'hint', style: `color:${extra.result.ok ? 'var(--ok)' : 'var(--bad)'}` }, extra.result.ok ? t('test_ok') : `${t(extra.result.kind === 'auth' ? 'signed_out' : extra.result.kind === 'limit' ? 'out_limit' : 'failed')} ${extra.result.message || ''}`));
     if (extra.log) card.append(h('pre', { class: 'log' }, extra.log));
     if (!p.installed && p.searched && extra.showDiag) {
@@ -533,15 +574,22 @@ function providerCard(id, { onChange } = {}) {
   async function reload() { S.providers = await api.providers.status(); Object.assign(p, S.providers[id]); draw(); refreshProviders(); onChange && onChange(); }
   async function install() {
     let log = '';
-    const off = api.providers.onInstallLog((d) => { if (d.id === id) { log += d.text; draw({ busy: true, log: log.slice(-3000) }); } });
-    draw({ busy: true });
-    const r = await api.providers.install(id);
-    off();
+    const stageText = (pr) => `${t('inst_' + pr.stage)}${pr.percent != null && pr.stage === 'download' ? ` ${pr.percent}%` : ''}${pr.text ? ` · ${pr.text}` : ''}`;
+    const off = api.providers.onInstallLog((d) => {
+      if (d.id !== id) return;
+      if (d.progress) draw({ busy: true, hint: stageText(d.progress), progress: d.progress.stage === 'download' ? d.progress.percent : null });
+      else { log += d.text || ''; draw({ busy: true, log: log.slice(-3000) }); }
+    });
+    draw({ busy: true, hint: t('inst_start') });
+    let r;
+    try { r = await api.providers.install(id); }
+    catch (e) { r = { ok: false, log: String((e && e.message) || e) }; }
+    finally { off(); }
     if (!r.ok && r.reason === 'no_node') { draw({ hint: t('ob_node_missing') }); return; }
     await reload();
-    if (!r.ok) draw({ log: r.log, showDiag: true });
+    if (!r.ok) draw({ hint: `✖ ${t('inst_failed')}`, log: r.log, showDiag: true });
     else if (!p.installed) draw({ hint: t('installed_not_found'), log: r.log, showDiag: true });
-    else draw({ hint: t(`login_hint_${id}`) });
+    else { draw({ hint: `✓ ${t('inst_ok')} ${t(`login_hint_${id}`)}` }); }
   }
   async function login() { await api.providers.login(id); draw({ hint: t(`login_hint_${id}`) }); setTimeout(reload, 20000); }
   async function test() { draw({ testing: true }); const r = await api.providers.test(id); await reload(); draw({ result: r }); }
@@ -555,6 +603,7 @@ function paneProviders(pane) {
       e.target.disabled = true; e.target.textContent = t('refreshing');
       await api.providers.refreshModels(); await refreshProviders(); paneProviders((pane.innerHTML = '', pane));
     } }, `⟳ ${t('refresh_models')}`));
+  pane.append(usageCard());
   for (const id of PROVIDER_IDS) if (S.providers[id]) pane.append(providerCard(id));
   const cm = S.settings.customModels || {};
   const card = h('div', { class: 'card' }, h('div', { class: 'field', style: 'display:block' },
@@ -567,6 +616,20 @@ function paneProviders(pane) {
       } })));
   }
   pane.append(card);
+}
+
+/** Today's use of each subscription, with its state (ready / resting until / sign-in needed). */
+function usageCard() {
+  const ids = PROVIDER_IDS.filter((id) => S.providers[id] && S.providers[id].installed);
+  const max = Math.max(5, ...ids.map((id) => S.providers[id].usageToday));
+  return h('div', { class: 'card usage' }, h('div', { class: 'uhead' }, h('b', {}, t('usage_title')), h('span', { class: 'help', style: 'margin:0' }, t('usage_help'))),
+    ids.map((id) => {
+      const p = S.providers[id];
+      const state = p.cooldownUntil ? `${t('resting_until')} ${fmtTime(p.cooldownUntil)}` : !p.signedIn ? t('needs_signin') : t('ready');
+      return h('div', { class: 'urow' }, h('span', { class: 'uname' }, p.label),
+        h('div', { class: 'ubar' }, h('i', { class: id, style: `width:${Math.round((p.usageToday / max) * 100)}%` })),
+        h('span', { class: 'ucount' }, `${p.usageToday}`), h('span', { class: `ustate ${p.cooldownUntil ? 'warn' : !p.signedIn ? 'bad' : 'ok'}` }, state));
+    }));
 }
 
 function modelOptions(provider, selected) {
@@ -617,7 +680,11 @@ function paneGeneral(pane) {
     h('input', { type: 'radio', name: 'autonomy', value: k, checked: s.autonomy === k, onchange: () => saveSettings({ autonomy: k }) }), t(`autonomy_${k}`))));
   const num = (key, min, max) => h('input', { type: 'number', min, max, value: s[key], onchange: (e) => saveSettings({ [key]: Math.max(min, Math.min(max, Number(e.target.value) || min)) }) });
   const wsBtn = h('button', { class: 'btn', onclick: async () => { const d = await api.dialog.pickFolder(); if (d) { await saveSettings({ defaultWorkspace: d }); openSettings('general'); } } }, s.defaultWorkspace ? baseName(s.defaultWorkspace) : t('choose_folder'));
-  pane.append(h('h2', {}, t('tab_general')), h('div', { class: 'card' },
+  const mem = h('textarea', { class: 'memory', dir: 'auto', rows: 5, placeholder: t('memory_ph') });
+  mem.value = s.memory || '';
+  mem.onchange = () => saveSettings({ memory: mem.value });
+  pane.append(h('h2', {}, t('memory_title')), h('p', { class: 'help' }, t('memory_help')), h('div', { class: 'card' }, mem));
+  pane.append(h('h2', { style: 'margin-top:22px' }, t('tab_general')), h('div', { class: 'card' },
     field(t('language'), lang),
     field(t('smart_routing'), toggle(s.smartRouting, (v) => saveSettings({ smartRouting: v })), t('smart_routing_help')),
     h('div', { class: 'field', style: 'display:block' }, h('label', {}, t('autonomy')), h('div', { style: 'margin-top:10px' }, autonomy)),
@@ -625,6 +692,9 @@ function paneGeneral(pane) {
     field(t('history_turns'), num('historyTurns', 1, 50)),
     field(t('cooldown'), num('cooldownMinutes', 5, 1440)),
     field(t('timeout'), num('timeoutMinutes', 1, 240)),
+    field(t('continuity'), toggle(s.continuity !== false, (v) => saveSettings({ continuity: v })), t('continuity_help')),
+    field(t('balance'), toggle(s.balance !== false, (v) => saveSettings({ balance: v })), t('balance_help')),
+    field(t('snapshots'), toggle(s.snapshots !== false, (v) => saveSettings({ snapshots: v })), t('snapshots_help')),
     field(t('close_to_tray'), toggle(s.closeToTray, (v) => saveSettings({ closeToTray: v }))),
     field(t('launch_login'), toggle(s.launchAtLogin, (v) => saveSettings({ launchAtLogin: v }))),
     field(t('shortcut'), h('input', { type: 'text', value: s.globalShortcut, dir: 'ltr', onchange: (e) => saveSettings({ globalShortcut: e.target.value.trim() }) }))));
@@ -763,7 +833,12 @@ async function boot() {
     renderAttachments();
   });
 
-  $('#micBtn').onclick = () => listen();
+  // Mic: click = talk until you stop; press and hold = talk while holding.
+  let holdTimer = null, holding = false;
+  $('#micBtn').onpointerdown = () => { holding = false; holdTimer = setTimeout(() => { holding = true; if (V.state !== 'listening') listen(); }, 350); };
+  $('#micBtn').onpointerup = () => { clearTimeout(holdTimer); if (holding) { if (V.rec) V.rec.stop(); } else listen(); holding = false; };
+  $('#micBtn').onpointerleave = () => { clearTimeout(holdTimer); if (holding && V.rec) V.rec.stop(); holding = false; };
+  $('#councilBtn').onclick = () => { S.councilOn = !S.councilOn; $('#councilBtn').classList.toggle('on', S.councilOn); toast(t(S.councilOn ? 'council_on' : 'council_off')); };
   $('#voiceModeBtn').onclick = toggleVoiceMode;
   $('#vbStop').onclick = onVoiceBarButton;
   await Promise.all([refreshConvs(), refreshProviders()]);

@@ -159,9 +159,7 @@ const gemini = {
   label: 'Gemini',
   vendor: 'Google Antigravity',
   bin: 'agy',
-  install: process.platform === 'win32'
-    ? { command: 'powershell', args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', 'irm https://antigravity.google/cli/install.ps1 | iex'] }
-    : { command: 'bash', args: ['-c', 'curl -fsSL https://antigravity.google/cli/install.sh | bash'] },
+  install: { native: 'agy' }, // see installers.js — Google's install.ps1 steps, done in-process
   loginCommand: 'agy',
   credentialFiles: [], // stored in the system keyring — sign-in is checked with `agy models` instead
   authProbe: true,

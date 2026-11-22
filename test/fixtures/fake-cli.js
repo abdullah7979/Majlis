@@ -141,6 +141,19 @@ function main() {
   sessions[sid] = [...(sessions[sid] || []), tail];
   saveSessions();
 
+  // Side effects that real agents have: editing files, generating images.
+  if (/EDIT_FILES/.test(fullInput)) {
+    fs.writeFileSync(path.join(process.cwd(), 'new.txt'), 'created by agent');
+    fs.appendFileSync(path.join(process.cwd(), 'a.txt'), '\nchanged by agent');
+  }
+  if (/wants a real image/.test(fullInput)) {
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(400)]);
+    if (name === 'codex') {
+      const dir = path.join(process.env.CODEX_HOME || path.join(require('os').homedir(), '.codex'), 'generated_images', sid || 'x');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'ig_1.png'), png);
+    } else fs.writeFileSync(path.join(process.cwd(), 'image_1.png'), png);
+  }
   let answer;
   const at = fullInput.match(/^@(\S+)/m);
   if (/Transcribe the speech/.test(fullInput)) {

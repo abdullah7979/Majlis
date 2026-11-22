@@ -1,5 +1,6 @@
 'use strict';
-const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, nativeImage, Notification, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, nativeImage, Notification, session, net } = require('electron');
+const { installAgy } = require('../core/installers');
 const path = require('path');
 const fs = require('fs');
 const { Store } = require('../core/store');
@@ -115,16 +116,23 @@ function registerIpc() {
     return store.saveConversation(c);
   });
 
-  h('chat:send', async ({ conversationId, text, files = [], force, smart, voice }) => {
+  const startChat = (mode) => async ({ conversationId, text, files = [], force, smart, voice }) => {
     const attachments = files.length ? store.importAttachments(conversationId, files.filter((f) => fs.existsSync(f))) : [];
-    orch.send({ conversationId, text, attachments, force, smart, voice }, (e) => {
+    const emit = (e) => {
       if (win && !win.isDestroyed()) win.webContents.send('chat:event', e);
       if ((e.type === 'done' || e.type === 'failed') && win && !win.isFocused() && Notification.isSupported()) {
         new Notification({ title: 'Majlis', body: e.type === 'done' ? `${e.label} ✓` : '✖' }).show();
       }
-    }).catch((err) => win && win.webContents.send('chat:event', { conversationId, type: 'failed', error: String(err.message || err) }));
+    };
+    const job = mode === 'council'
+      ? orch.council({ conversationId, text, attachments, voice }, emit)
+      : orch.send({ conversationId, text, attachments, force, smart, voice }, emit);
+    job.catch((err) => win && win.webContents.send('chat:event', { conversationId, type: 'failed', error: String(err.message || err) }));
     return true;
-  });
+  };
+  h('chat:send', startChat('send'));
+  h('chat:council', startChat('council'));
+  h('chat:undo', ({ conversationId, messageId }) => orch.undoChanges(conversationId, messageId));
   h('chat:cancel', (id) => { orch.cancel(id); return true; });
   h('chat:feedback', ({ category, provider, good, conversationId, messageId }) => {
     if (CATEGORIES.includes(category)) store.addFeedback(category, provider, good);
@@ -143,6 +151,22 @@ function registerIpc() {
     try { if (p.prepareLogin) p.prepareLogin(); } catch (_) {}
     openTerminal(p.loginCommand);
     return true;
+  });
+
+  h('providers:install', async (id) => {
+    const p = PROVIDERS[id]; if (!p) return { ok: false, log: 'unknown provider' };
+    const send = (msg) => { if (win && !win.isDestroyed()) win.webContents.send('providers:install-log', { id, ...msg }); };
+    if (p.install && p.install.native === 'agy') {
+      const r = await installAgy({ fetch: (u, o) => net.fetch(u, o), onProgress: (pr) => send({ progress: pr }) });
+      if (r.ok) await orch.refreshCatalog(true).catch(() => {});
+      return { ok: r.ok, log: r.ok ? '' : r.error, stage: r.stage };
+    }
+    const npm = await which('npm', augmentedEnv());
+    if (!npm) return { ok: false, reason: 'no_node' };
+    const r = await run(npm, ['install', '-g', p.npmPackage], {
+      timeoutMs: 10 * 60e3, onStdout: (d) => send({ text: d }), onStderr: (d) => send({ text: d }),
+    });
+    return { ok: r.code === 0, log: (r.stderr || r.stdout).slice(-1500) };
   });
 
   h('system:check-node', async () => {
