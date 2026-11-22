@@ -1,4 +1,5 @@
 'use strict';
+const { Watcher, initProjectMemory } = require('../core/workspace');
 const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, nativeImage, Notification, session, net } = require('electron');
 const { installAgy } = require('../core/installers');
 const path = require('path');
@@ -136,14 +137,17 @@ function registerIpc() {
         new Notification({ title: 'Majlis', body: e.type === 'done' ? `${e.label} ✓` : '✖' }).show();
       }
     };
-    const job = mode === 'council'
-      ? orch.council({ conversationId, text, attachments, voice }, emit)
+    const job = mode === 'council' ? orch.council({ conversationId, text, attachments, voice }, emit)
+      : mode === 'compare' ? orch.council({ conversationId, text, attachments, voice, compare: true }, emit)
+      : mode === 'project' ? orch.project({ conversationId, text, attachments, voice }, emit)
       : orch.send({ conversationId, text, attachments, force, smart, voice }, emit);
     job.catch((err) => win && win.webContents.send('chat:event', { conversationId, type: 'failed', error: String(err.message || err) }));
     return true;
   };
   h('chat:send', startChat('send'));
   h('chat:council', startChat('council'));
+  h('chat:compare', startChat('compare'));
+  h('chat:project', startChat('project'));
   h('voice:fix', (text, conversationId) => orch.fixTranscript(String(text || ''), { conversationId }));
   h('chat:improve', (text) => orch.improvePrompt(String(text || '')));
 
@@ -216,6 +220,17 @@ function registerIpc() {
     return { installed: true, version: r.stdout.trim() };
   });
 
+  const wsWatcher = new Watcher((dir, snap) => { if (win && !win.isDestroyed()) win.webContents.send('ws:changed', { dir, files: snap.files, entry: snap.entry }); });
+  h('api:log', () => apiServer.getLog());
+  h('ws:open', (conversationId) => {
+    const dir = orch.cwdFor(conversationId);
+    const snap = wsWatcher.watch(dir);
+    const { readProjectMemory } = require('../core/workspace');
+    return { dir, files: snap.files, entry: snap.entry, hasRules: !!readProjectMemory(dir) };
+  });
+  h('ws:close', () => { wsWatcher.stop(); return true; });
+  h('ws:init-memory', (conversationId) => { const f = initProjectMemory(orch.cwdFor(conversationId)); shell.openPath(f); return f; });
+  h('ws:open-external', (p) => { if (p && fs.existsSync(p)) shell.openPath(p); return true; });
   h('dialog:pick-folder', async () => {
     const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] });
     return r.canceled ? null : r.filePaths[0];

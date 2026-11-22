@@ -43,7 +43,7 @@ class Store {
       if (!raw.schema || raw.schema < 4) this._migratedGemini = true;
       try { writeJson(this.settingsFile, this.settings); } catch (_) {}
     }
-    this.state = deepMerge({ cooldowns: {}, usage: {}, learning: {}, auth: {}, models: {}, tokens: {} }, readJson(this.stateFile, {}));
+    this.state = deepMerge({ cooldowns: {}, usage: {}, learning: {}, auth: {}, models: {}, tokens: {}, limits: {} }, readJson(this.stateFile, {}));
     if (this._migratedGemini) { delete this.state.models.gemini; delete this.state.auth.gemini; delete this.state.cooldowns.gemini; }
   }
 
@@ -87,6 +87,17 @@ class Store {
     const e = ((T[day] = T[day] || {})[provider] = T[day][provider] || { input: 0, output: 0, cached: 0, runs: 0, estimated: 0 });
     e.input += input; e.output += output; e.cached += cached; e.runs += 1; if (estimated) e.estimated += 1;
     this.saveState();
+  }
+  /** Rate-limit windows the CLIs report (Claude: 5-hour/weekly status + reset; Codex: used %). Kept only while still relevant. */
+  setLimits(provider, { window, status = null, usedPct = null, resetsAt = null }) {
+    const L = (this.state.limits = this.state.limits || {});
+    const w = ((L[provider] = L[provider] || {})[window || 'session'] = { status, usedPct, resetsAt, updated: Date.now() });
+    this.saveState();
+    return w;
+  }
+  limitsFor(provider, now = Date.now()) {
+    const L = (this.state.limits || {})[provider] || {};
+    return Object.entries(L).filter(([, v]) => !v.resetsAt || v.resetsAt > now).map(([window, v]) => ({ window, ...v }));
   }
   /** { today: {provider: totals}, week: {provider: totals}, days: [{day, provider: total}] } */
   tokenReport(now = Date.now()) {

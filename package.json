@@ -1,7 +1,7 @@
 {
   "name": "majlis",
   "productName": "Majlis",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "One desktop app for all your AI subscriptions — smart routing and automatic fallback across Claude Code, Codex and Gemini CLI.",
   "main": "src/main/main.js",
   "author": "abdullah7979",
@@ -9,7 +9,7 @@
   "private": true,
   "scripts": {
     "start": "electron .",
-    "test": "node --test test/unit.test.js test/orchestrator.test.js test/installer.test.js test/wiring.test.js test/automation-api.test.js",
+    "test": "node --test test/unit.test.js test/orchestrator.test.js test/installer.test.js test/wiring.test.js test/automation-api.test.js test/project.test.js",
     "smoke": "electron . --smoke-test",
     "dist": "electron-builder --win --publish never",
     "release": "electron-builder --win --publish always"

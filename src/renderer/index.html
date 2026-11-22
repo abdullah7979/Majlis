@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: file:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' file: blob: data: https://huggingface.co https://*.huggingface.co https://*.hf.co;">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: file:; frame-src file:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' file: blob: data: https://huggingface.co https://*.huggingface.co https://*.hf.co;">
 <title>Majlis</title>
 <link rel="stylesheet" href="../../node_modules/@highlightjs/cdn-assets/styles/github-dark.min.css">
 <link rel="stylesheet" href="styles.css">
@@ -60,6 +60,9 @@
           <button id="micBtn" class="icon-btn mic" data-i18n-title="mic_title">🎙</button>
           <button id="improveBtn" class="voice-mode" data-i18n-title="improve_title"><span class="ico">✨</span><span data-i18n="improve"></span></button>
           <button id="promptsBtn" class="icon-btn" data-i18n-title="prompts_title">📚</button>
+          <button id="projectBtn" class="voice-mode council-btn" data-i18n-title="project_title"><span class="ico">🏗</span><span data-i18n="project"></span></button>
+          <button id="compareBtn" class="voice-mode council-btn" data-i18n-title="compare_title"><span class="ico">⚖</span><span data-i18n="compare"></span></button>
+          <button id="previewBtn" class="icon-btn" data-i18n-title="pv_toggle">👁</button>
           <button id="councilBtn" class="voice-mode council-btn" data-i18n-title="council_title"><span class="ico">🏛</span><span data-i18n="council"></span></button>
           <button id="voiceModeBtn" class="voice-mode" data-i18n-title="voice_mode_title"><span class="ico">🎧</span><span data-i18n="voice_mode"></span></button>
           <select id="modelPick" class="model-pick"></select>
@@ -70,6 +73,22 @@
       <div id="dropHint" class="drop-hint hidden" data-i18n="drop_here"></div>
     </footer>
   </main>
+  <aside id="preview" class="preview hidden">
+    <div class="pv-head">
+      <button id="pvTabView" class="pv-tab on"></button><button id="pvTabFiles" class="pv-tab"></button>
+      <div class="grow"></div>
+      <button id="pvRules" class="icon-btn" data-i18n-title="pv_rules">📝</button>
+      <button id="pvReload" class="icon-btn" data-i18n-title="pv_reload">⟳</button>
+      <button id="pvExternal" class="icon-btn" data-i18n-title="pv_external">↗</button>
+      <button id="pvFolder" class="icon-btn" data-i18n-title="pv_folder">📂</button>
+      <button id="pvClose" class="icon-btn">✕</button>
+    </div>
+    <div class="pv-body">
+      <iframe id="pvFrame" sandbox="allow-scripts allow-forms allow-popups allow-same-origin" title="preview"></iframe>
+      <div id="pvFiles" class="pv-files hidden"></div>
+      <div id="pvEmpty" class="pv-empty"></div>
+    </div>
+  </aside>
 </div>
 
 <div id="overlay" class="overlay hidden"></div>

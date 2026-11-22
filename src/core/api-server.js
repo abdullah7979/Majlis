@@ -115,6 +115,10 @@ class ApiServer {
   }
 
   // ---------------------------------------------------------------- routes
+  /** Last 100 requests, newest first, so the user can see who is calling the local API and how it went. */
+  record(entry) { (this.log = this.log || []).unshift(entry); this.log.length = Math.min(this.log.length, 100); }
+  getLog() { return this.log || []; }
+
   async handle(req, res) {
     const url = new URL(req.url, 'http://localhost');
     if (req.method === 'OPTIONS') {
@@ -142,6 +146,7 @@ class ApiServer {
     const plan = this.resolve(body.model);
     if (!plan) return this.json(res, 404, { error: { message: `Unknown model "${body.model}". GET /v1/models lists what you can use.`, type: 'invalid_request_error', code: 'model_not_found' } });
     this.requests++;
+    const t0 = Date.now();
 
     // A conversation per request (or continue one). Earlier messages become context.
     let conv = body.conversation_id && /^[a-f0-9]{16}$/.test(body.conversation_id) ? this.store.getConversation(body.conversation_id) : null;
@@ -188,6 +193,7 @@ class ApiServer {
       msg = { status: 'failed', error: String(e.message || e), trail: [] };
     }
     const ok = msg.status === 'done';
+    this.record({ ts: t0, model: body.model || 'majlis-auto', provider: msg.provider || null, ms: Date.now() - t0, status: ok ? 'ok' : 'failed', tokens: msg.tokens ? (msg.tokens.input || 0) + (msg.tokens.output || 0) : null, conv: conv.id, stream });
     const modelName = ok ? `${msg.provider}:${msg.model || 'default'}` : usedModel;
     const majlis = { conversation_id: conv.id, provider: msg.provider || null, model: msg.model || null, category: msg.category || null, route: msg.routeSource || null, images: msg.images || [], trail: msg.trail || [] };
 

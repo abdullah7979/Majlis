@@ -8,6 +8,7 @@
 //     lastRun, lastStatus, conversationId, workspace }
 
 const crypto = require('crypto');
+const { snapshot } = require('./workspace');
 
 function parseTime(t) {
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || '08:00'));
@@ -36,6 +37,7 @@ function lastDue(task, now = Date.now()) {
 /** Next time the task will run (for display). */
 function nextRun(task, now = Date.now()) {
   const s = task.schedule || {};
+  if (s.type === 'watch') return null;
   if (s.type === 'hours') {
     const every = Math.max(1, Number(s.every) || 1) * 3600e3;
     const ld = lastDue(task, now);
@@ -86,10 +88,11 @@ class Scheduler {
       enabled: task.enabled !== false,
       mode: task.mode === 'council' ? 'council' : 'auto',
       schedule: {
-        type: ['daily', 'weekly', 'hours'].includes(task.schedule && task.schedule.type) ? task.schedule.type : 'daily',
+        type: ['daily', 'weekly', 'hours', 'watch'].includes(task.schedule && task.schedule.type) ? task.schedule.type : 'daily',
         time: (task.schedule && task.schedule.time) || '08:00',
         days: (task.schedule && task.schedule.days) || [0, 1, 2, 3, 4],
         every: (task.schedule && task.schedule.every) || 6,
+        folder: (task.schedule && task.schedule.folder) || '',
       },
       workspace: task.workspace || '',
     };
@@ -109,11 +112,32 @@ class Scheduler {
   stop() { if (this.timer) clearInterval(this.timer); this.timer = null; }
 
   async tick(now = Date.now()) {
-    for (const t of this.tasks()) if (isDue(t, now) && !this.running.has(t.id)) await this.run(t.id);
+    for (const t of this.tasks()) {
+      if (this.running.has(t.id)) continue;
+      if (t.schedule && t.schedule.type === 'watch') { await this.checkWatch(t, now); continue; }
+      if (isDue(t, now)) await this.run(t.id);
+    }
+  }
+
+  /** Folder trigger: when files in the folder are added or changed (and have settled for a few seconds), run the task on exactly those files. */
+  async checkWatch(task, now) {
+    const dir = task.schedule.folder;
+    if (!task.enabled || !task.prompt || !dir) return;
+    this.seen = this.seen || new Map();
+    let snap; try { snap = snapshot(dir); } catch (_) { return; }
+    const prev = this.seen.get(task.id);
+    if (!prev) { this.seen.set(task.id, { files: new Map(snap.files.map((f) => [f.path, `${f.size}:${Math.round(f.mtime)}`])), pending: null }); return; }
+    const changed = snap.files.filter((f) => prev.files.get(f.path) !== `${f.size}:${Math.round(f.mtime)}`);
+    if (!changed.length) { prev.pending = null; return; }
+    const sig = changed.map((f) => `${f.path}:${f.size}`).join('|');
+    if (!prev.pending || prev.pending.sig !== sig) { prev.pending = { sig, since: now }; return; } // still changing: wait until it settles
+    if (now - prev.pending.since < (this.settleMs == null ? 4000 : this.settleMs)) return;
+    prev.files = new Map(snap.files.map((f) => [f.path, `${f.size}:${Math.round(f.mtime)}`])); prev.pending = null;
+    await this.run(task.id, `\n\n(Files that just changed in ${dir}:\n${changed.slice(0, 20).map((f) => '- ' + require('path').join(dir, f.path)).join('\n')})`);
   }
 
   /** Run a task now (also used by the "Run now" button). */
-  async run(id) {
+  async run(id, extra = '') {
     const task = this.tasks().find((t) => t.id === id);
     if (!task || this.running.has(id)) return null;
     this.running.add(id);
@@ -126,7 +150,7 @@ class Scheduler {
         this.store.saveConversation(conv);
       }
       this.update(id, { lastRun: Date.now(), lastStatus: 'running', conversationId: conv.id });
-      const opts = { conversationId: conv.id, text: task.prompt };
+      const opts = { conversationId: conv.id, text: task.prompt + extra, autonomy: extra ? 'edit' : undefined };
       const msg = task.mode === 'council' ? await this.orch.council(opts, this.onEvent) : await this.orch.send(opts, this.onEvent);
       this.update(id, { lastStatus: msg.status });
       this.onFinished(task, msg);

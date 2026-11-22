@@ -172,6 +172,7 @@ function showWelcome() {
   updateWorkspaceChip();
   updateSendButton();
   renderSidebar();
+  if (PV.open) togglePreview(true);
   $('#input').focus();
 }
 async function openConversation(id) {
@@ -251,6 +252,13 @@ function changesEl(m) {
   }
   return box;
 }
+function projectEl(m) {
+  const P = m.project, order = ['plan', 'build', 'verify', 'review'];
+  const cur = m.status === 'done' ? 99 : Math.max(0, order.indexOf(P.phase === 'fix' ? 'review' : P.phase));
+  return h('div', { class: 'project-card' },
+    h('div', { class: 'ph' }, order.map((k, i) => h('span', { class: i < cur ? 'done' : i === cur ? 'on' : '' }, (i < cur ? '✓ ' : '') + t('ph_' + k)))),
+    h('ol', {}, P.steps.map((x) => h('li', { class: x.status }, `${x.status === 'done' ? '✓' : x.status === 'running' ? '⏳' : x.status === 'failed' ? '✖' : '○'} ${x.title}`, x.summary ? h('small', {}, x.summary) : null))));
+}
 function councilEl(m) {
   const st = (x) => (x.ok ? '✓' : x.kind === 'running' ? '…' : '✖');
   return h('details', { class: 'council' },
@@ -288,6 +296,7 @@ function updateAiEl(el, m) {
     renderMarkdown(body, m.text);
     el.append(body);
   }
+  if (m.project && m.project.steps && m.project.steps.length) el.append(projectEl(m));
   if (m.images && m.images.length) el.append(imagesEl(m.images));
   if (m.changes && m.changes.files && m.changes.files.length) el.append(changesEl(m));
   if (m.council && m.council.length) el.append(councilEl(m));
@@ -358,7 +367,10 @@ function onChatEvent(e) {
     case 'retry': if (e.reason === 'bad_model') m.notice = t('retry_model'); break;
     case 'skip': (m.trail = m.trail || []).push({ provider: e.provider, model: e.model, outcome: e.why, until: e.until }); break;
     case 'fallback': (m.trail = m.trail || []).push({ provider: e.provider, model: m.liveModel, outcome: e.kind, until: e.until, message: e.message }); m.text = ''; break;
-    case 'done': Object.assign(m, { status: 'done', text: e.text, provider: e.provider, model: e.model, providerLabel: e.label, images: e.images || m.images, changes: e.changes || m.changes, council: e.council || m.council, tokens: e.tokens || m.tokens }); break;
+    case 'done': Object.assign(m, { status: 'done', text: e.text, provider: e.provider, model: e.model, providerLabel: e.label, images: e.images || m.images, changes: e.changes || m.changes, council: e.council || m.council, tokens: e.tokens || m.tokens, project: e.project || m.project }); break;
+    case 'project-plan': m.project = { title: e.title, steps: e.steps, phase: 'build' }; m.statusText = null; if (!PV.open) togglePreview(true); break;
+    case 'project-step': if (m.project && m.project.steps[e.index]) Object.assign(m.project.steps[e.index], { status: e.status, summary: e.summary || m.project.steps[e.index].summary, provider: e.provider }); break;
+    case 'project-phase': m.project = m.project || { steps: [] }; m.project.phase = e.phase; m.statusText = null; break;
     case 'council-start': (m.council = m.council || []).push({ provider: e.provider, label: e.label, model: e.model, kind: 'running', ok: false }); m.statusText = t('council_thinking'); break;
     case 'council-member': { m.council = m.council || []; const i = m.council.findIndex((x) => x.provider === e.provider); const v = { ...e }; delete v.type; if (i >= 0) m.council[i] = v; else m.council.push(v); break; }
     case 'council-activity': (m.activity = m.activity || []).push(`${providerLabel(e.provider)} · ${e.text}`); break;
@@ -392,13 +404,54 @@ async function sendCurrent({ voice = false } = {}) {
   const anyReady = PROVIDER_IDS.some((id) => S.providers[id] && S.providers[id].installed && S.providers[id].enabled);
   if (!anyReady) { toast(t('no_provider_ready')); openSettings('providers'); return; }
   const conv = await ensureConversation();
+  if (PV.open && PV.dir === '') await togglePreview(true);
   const files = S.pendingFiles.slice();
   $('#input').value = ''; S.pendingFiles = []; renderAttachments(); autoGrow();
   const force = $('#modelPick').value === 'auto' ? null : $('#modelPick').value;
   S.running.add(conv.id); updateSendButton();
   if (voice) V.awaiting = conv.id;
-  if (S.councilOn && !force) await api.chat.council({ conversationId: conv.id, text, files, voice });
+  if (S.projectOn && !force) await api.chat.project({ conversationId: conv.id, text, files, voice });
+  else if (S.compareOn && !force) await api.chat.compare({ conversationId: conv.id, text, files, voice });
+  else if (S.councilOn && !force) await api.chat.council({ conversationId: conv.id, text, files, voice });
   else await api.chat.send({ conversationId: conv.id, text, files, force, voice });
+}
+
+// ------------------------------------------------------------------ live preview
+const PV = { open: false, dir: '', entry: null, files: [], tab: 'view', lastSig: '' };
+function pvUrl() { return PV.entry ? 'file:///' + (PV.dir + '/' + PV.entry).replace(/\\/g, '/').split('/').filter((x, i) => i || x).map(encodeURIComponent).join('/').replace(/^([A-Za-z])%3A/, '$1:') : ''; }
+function pvRender(forceReload) {
+  $('#pvTabView').textContent = t('pv_view'); $('#pvTabFiles').textContent = t('pv_files') + ` (${PV.files.length})`; $('#pvEmpty').textContent = t('pv_empty');
+  const showView = PV.tab === 'view';
+  $('#pvFrame').classList.toggle('hidden', !showView); $('#pvFiles').classList.toggle('hidden', showView);
+  $('#pvEmpty').classList.toggle('hidden', !!PV.entry || !showView && PV.files.length > 0);
+  $('#pvTabView').classList.toggle('on', showView); $('#pvTabFiles').classList.toggle('on', !showView);
+  const url = pvUrl();
+  if (url && (forceReload || $('#pvFrame').getAttribute('data-url') !== url)) { $('#pvFrame').setAttribute('data-url', url); $('#pvFrame').src = url + '?t=' + Date.now(); }
+  $('#pvFiles').replaceChildren(...PV.files.map((f) => h('div', { class: 'f', onclick: () => api.ws.openPath(PV.dir + '/' + f.path) }, h('span', {}, f.path), h('i', {}, fmtTok(f.size) + 'B'))));
+}
+async function togglePreview(force) {
+  const want = force === undefined ? !PV.open : force;
+  PV.open = want;
+  $('#preview').classList.toggle('hidden', !want); $('#app').classList.toggle('with-preview', want);
+  if (!want) { api.ws.close(); $('#pvFrame').removeAttribute('src'); $('#pvFrame').removeAttribute('data-url'); return; }
+  if (!S.conv) { PV.files = []; PV.entry = null; PV.dir = ''; pvRender(); return; }
+  const r = await api.ws.open(S.conv.id);
+  Object.assign(PV, { dir: r.dir, files: r.files, entry: r.entry }); pvRender(true);
+}
+function initPreview() {
+  $('#pvClose').onclick = () => togglePreview(false);
+  $('#pvReload').onclick = () => pvRender(true);
+  $('#pvExternal').onclick = () => PV.entry && api.ws.openPath(PV.dir + '/' + PV.entry);
+  $('#pvFolder').onclick = () => PV.dir && api.ws.openPath(PV.dir);
+  $('#pvRules').onclick = () => S.conv && api.ws.initMemory(S.conv.id);
+  $('#pvTabView').onclick = () => { PV.tab = 'view'; pvRender(); };
+  $('#pvTabFiles').onclick = () => { PV.tab = 'files'; pvRender(); };
+  api.ws.onChanged((u) => {
+    if (!PV.open || u.dir !== PV.dir) return;
+    const htmlSig = u.files.filter((f) => /\.(html?|css|js|svg|json)$/i.test(f.path)).map((f) => f.path + f.size + Math.round(f.mtime)).join('|');
+    PV.files = u.files; PV.entry = u.entry;
+    pvRender(htmlSig !== PV.lastSig); PV.lastSig = htmlSig;
+  });
 }
 
 // ------------------------------------------------------------------ voice
@@ -649,9 +702,18 @@ function usageCard() {
       return h('div', { class: 'urow' }, h('span', { class: 'uname' }, p.label),
         h('div', { class: 'ubar' }, h('i', { class: id, style: `width:${Math.round((p.usageToday / max) * 100)}%` })),
         h('span', { class: 'ucount' }, `${p.usageToday}`), h('span', { class: 'utok', title: tkTitle }, tkText),
+        limitChips(p),
         h('span', { class: `ustate ${p.cooldownUntil ? 'warn' : !p.signedIn ? 'bad' : 'ok'}` }, state));
     }),
     h('p', { class: 'help', style: 'margin:10px 0 0' }, t('tok_note')));
+}
+function limitChips(p) {
+  return h('span', {}, (p.limits || []).map((l) => {
+    const name = { five_hour: '5h', seven_day: '7d', primary: '5h', secondary: '7d', session: '' }[l.window] || l.window;
+    const hit = l.status && /reject|exceed|limit/i.test(l.status), warn = l.status && /warn/i.test(l.status) || (l.usedPct != null && l.usedPct >= 80);
+    const txt = `${name} ${l.usedPct != null ? l.usedPct + '%' : hit ? t('limit_hit') : warn ? t('limit_warn') : t('limit_ok')}`.trim();
+    return h('span', { class: `limit-chip ${hit ? 'bad' : warn ? 'warn' : ''}`, title: l.resetsAt ? `${t('limit_resets')} ${fmtTime(l.resetsAt)}` : '' }, txt);
+  }));
 }
 function fmtTok(n) { n = n || 0; return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n); }
 
@@ -902,6 +964,9 @@ async function paneApi(pane) {
   const py = () => `from openai import OpenAI\nclient = OpenAI(base_url="${base()}", api_key="${key}")\nr = client.chat.completions.create(\n    model="majlis-auto",   # or majlis-council, claude:opus, codex:gpt-6-luna ...\n    messages=[{"role": "user", "content": "اكتب لي رد على هذا الإيميل"}],\n)\nprint(r.choices[0].message.content)`;
   const n8n = () => `n8n → OpenAI Chat Model (or "OpenAI" node)\n  Credentials → API Key: ${key}\n               Base URL: ${base()}\n  Model: majlis-auto`;
   const ex = (title, get) => h('details', { class: 'example' }, h('summary', {}, title), h('pre', { class: 'log', dir: 'ltr' }, get()), copyBtn(get));
+  const logRows = await api.api.log();
+  const logBox = h('details', { class: 'example' }, h('summary', {}, `${t('api_log')} (${logRows.length})`),
+    logRows.length ? h('table', { class: 'apilog', dir: 'ltr' }, logRows.slice(0, 40).map((r) => h('tr', {}, h('td', {}, new Date(r.ts).toLocaleTimeString()), h('td', {}, r.model), h('td', {}, r.provider || '—'), h('td', {}, `${r.ms} ms`), h('td', {}, r.tokens != null ? fmtTok(r.tokens) : '—'), h('td', { class: r.status === 'ok' ? 'ok' : 'bad' }, r.status)))) : h('p', { class: 'help' }, t('api_log_none')));
   pane.append(h('h2', {}, t('api_title')), h('p', { class: 'help' }, t('api_help')),
     h('div', { class: 'card' },
       field(t('api_enable'), h('div', { style: 'display:flex;gap:10px;align-items:center' }, status, toggle(!!a.enabled, (v) => apply({ enabled: v })))),
@@ -911,6 +976,7 @@ async function paneApi(pane) {
       field(t('api_port'), h('input', { type: 'number', min: 1024, max: 65535, value: a.port || 4891, onchange: (e) => apply({ port: Math.max(1024, Math.min(65535, Number(e.target.value) || 4891)) }) })),
       field(t('api_lan'), toggle(!!a.allowLan, (v) => apply({ allowLan: v })), t('api_lan_help')),
       field(t('api_autonomy'), autonomy),
+      logBox,
       field(t('api_models'), h('code', { dir: 'ltr' }, 'majlis-auto · majlis-council · claude:opus'), t('api_models_help')),
       field(t('api_test'), (() => { const out = h('span', { class: 'help', style: 'margin:0' }); const b = h('button', { class: 'btn', onclick: async () => {
         b.disabled = true; out.textContent = '…';
@@ -933,14 +999,17 @@ async function paneAutos(pane) {
     tk.schedule = tk.schedule || { type: 'daily', time: '08:00', days: [0, 1, 2, 3, 4], every: 6 };
     const name = h('input', { type: 'text', dir: 'auto', value: tk.name || '', placeholder: t('auto_ex1') });
     const prompt = h('textarea', { class: 'memory', rows: 4, dir: 'auto', placeholder: t('auto_ex1_p') }); prompt.value = tk.prompt || '';
-    const type = h('select', {}, ['daily', 'weekly', 'hours'].map((k) => h('option', { value: k }, t(`auto_${k}`)))); type.value = tk.schedule.type;
+    const type = h('select', {}, ['daily', 'weekly', 'hours', 'watch'].map((k) => h('option', { value: k }, t(`auto_${k}`)))); type.value = tk.schedule.type;
     const time = h('input', { type: 'time', value: tk.schedule.time || '08:00' });
     const every = h('input', { type: 'number', min: 1, max: 168, value: tk.schedule.every || 6, style: 'width:70px' });
     const days = h('div', { class: 'days' }, dayNames.map((d, i) => h('label', {}, h('input', { type: 'checkbox', checked: (tk.schedule.days || []).includes(i), 'data-day': i }), d)));
     const mode = h('select', {}, h('option', { value: 'auto' }, t('auto_mode_auto')), h('option', { value: 'council' }, t('auto_mode_council'))); mode.value = tk.mode || 'auto';
     const when = h('div', { class: 'when' });
+    let folder = tk.schedule.folder || '';
+    const folderBtn = h('button', { class: 'btn', onclick: async () => { const f = await api.dialog.pickFolder(); if (f) { folder = f; folderBtn.textContent = '📂 ' + f; } } }, folder ? '📂 ' + folder : t('auto_pick_folder'));
     const drawWhen = () => {
       when.innerHTML = '';
+      if (type.value === 'watch') { when.append(folderBtn); return; }
       if (type.value === 'hours') when.append(h('span', {}, t('auto_every')), every, h('span', {}, t('auto_hours_unit')));
       else { if (type.value === 'weekly') when.append(days); when.append(h('span', {}, t('auto_at')), time); }
     };
@@ -954,7 +1023,7 @@ async function paneAutos(pane) {
         h('button', { class: 'btn primary', onclick: async () => {
           if (!prompt.value.trim()) { prompt.focus(); return; }
           tasks = await api.auto.save({ ...tk, name: name.value.trim(), prompt: prompt.value.trim(), mode: mode.value,
-            schedule: { type: type.value, time: time.value || '08:00', every: Number(every.value) || 6, days: $$('input[data-day]', days).filter((c) => c.checked).map((c) => +c.dataset.day) } });
+            schedule: { type: type.value, time: time.value || '08:00', every: Number(every.value) || 6, days: $$('input[data-day]', days).filter((c) => c.checked).map((c) => +c.dataset.day), folder } });
           onDone();
         } }, t('save'))));
     return box;
@@ -964,7 +1033,7 @@ async function paneAutos(pane) {
     if (!tasks.length) list.append(h('p', { class: 'help' }, t('auto_none')));
     for (const tk of tasks) {
       const s = tk.schedule || {};
-      const whenText = s.type === 'hours' ? `${t('auto_every')} ${s.every} ${t('auto_hours_unit')}`
+      const whenText = s.type === 'watch' ? `📂 ${s.folder || '—'}` : s.type === 'hours' ? `${t('auto_every')} ${s.every} ${t('auto_hours_unit')}`
         : `${s.type === 'weekly' ? (s.days || []).map((d) => dayNames[d]).join('، ') : t('auto_daily')} · ${s.time}`;
       const last = tk.lastRun ? `${fmt(tk.lastRun)} ${tk.lastStatus === 'done' ? '✓' : tk.lastStatus === 'running' ? '…' : tk.lastStatus ? '✖' : ''}` : '—';
       const card = h('div', { class: 'card auto-card' },
@@ -1033,6 +1102,7 @@ async function boot() {
   S.settings = await api.settings.get();
   setLanguage(S.settings.language || systemLang());
   api.chat.onEvent(onChatEvent);
+  initPreview();
   api.onFocusInput(() => $('#input').focus());
   api.onNewConversation(() => showWelcome());
   api.onUpdate((u) => {
@@ -1088,7 +1158,11 @@ async function boot() {
   $('#micBtn').onpointerdown = () => { holding = false; holdTimer = setTimeout(() => { holding = true; if (V.state !== 'listening') listen(); }, 350); };
   $('#micBtn').onpointerup = () => { clearTimeout(holdTimer); if (holding) { if (V.rec) V.rec.stop(); } else listen(); holding = false; };
   $('#micBtn').onpointerleave = () => { clearTimeout(holdTimer); if (holding && V.rec) V.rec.stop(); holding = false; };
-  $('#councilBtn').onclick = () => { S.councilOn = !S.councilOn; $('#councilBtn').classList.toggle('on', S.councilOn); toast(t(S.councilOn ? 'council_on' : 'council_off')); };
+  const modeBtn = (id, key, other) => { $(id).onclick = () => { S[key] = !S[key]; $(id).classList.toggle('on', S[key]); if (S[key]) for (const [oid, ok] of other) { S[ok] = false; $(oid).classList.remove('on'); } toast(t(S[key] ? key.replace('On', '') + '_on' : key.replace('On', '') + '_off')); }; };
+  modeBtn('#projectBtn', 'projectOn', [['#councilBtn', 'councilOn'], ['#compareBtn', 'compareOn']]);
+  modeBtn('#compareBtn', 'compareOn', [['#councilBtn', 'councilOn'], ['#projectBtn', 'projectOn']]);
+  $('#previewBtn').onclick = () => togglePreview();
+  $('#councilBtn').onclick = () => { S.councilOn = !S.councilOn; $('#councilBtn').classList.toggle('on', S.councilOn); if (S.councilOn) { S.projectOn = S.compareOn = false; $('#projectBtn').classList.remove('on'); $('#compareBtn').classList.remove('on'); } toast(t(S.councilOn ? 'council_on' : 'council_off')); };
   $('#voiceModeBtn').onclick = toggleVoiceMode;
   $('#vbStop').onclick = onVoiceBarButton;
   await Promise.all([refreshConvs(), refreshProviders()]);

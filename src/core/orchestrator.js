@@ -11,6 +11,7 @@ const { classifyFailure, looksLikeLimitNotice } = require('./errors');
 const { heuristicClassify, buildClassifierPrompt, parseClassifierOutput } = require('./classifier');
 const { COUNCIL_MEMBERS } = require('./defaults');
 const { Snapshots } = require('./snapshots');
+const { readProjectMemory } = require('./workspace');
 
 // Short replies that continue the current task rather than start a new one.
 const FOLLOW_UP_RE = /^\s*(نعم|ايوه|إيوه|أيوه|ايه|إيه|اي|أي|اوكي|أوكي|تمام|طيب|زين|حلو|ممتاز|كمل|كمّل|استمر|كمله|كملها|كمّلها|زد|زيد|أكثر|اكثر|عدل|عدّل|عدلها|عدّلها|غيره|غيّره|غيرها|سو|سوه|سوّه|سوها|سويها|ابدأ|ابدا|يلا|نفذ|نفّذ|طبق|طبّق|جرب|جرّب|صحح|صلحها|صلّحها|لا|ok|okay|yes|yep|sure|continue|go on|go ahead|do it|more|again|retry|fix it|no)(?=$|[\s.,!؟?،])/i;
@@ -116,6 +117,7 @@ class Orchestrator {
         usageToday: usage[p.id] || 0,
         tokensToday: tokens.today[p.id] || null,
         tokensWeek: tokens.week[p.id] || null,
+        limits: this.store.limitsFor(p.id),
         models: this.models(p.id),
       };
     }));
@@ -238,6 +240,8 @@ class Orchestrator {
     if (learned.length) {
       prompt += `(What you know about this user from earlier conversations — use it naturally, do not mention it:\n- ${learned.slice(-40).join('\n- ').slice(0, 3000)})\n\n`;
     }
+    const rules = readProjectMemory(conv.workspace);
+    if (rules) prompt += `(Project rules from MAJLIS.md — follow them:\n${rules})\n\n`;
     if (promptEng) {
       prompt += '(Act as an expert prompt engineer. Write a ready-to-use prompt the user can paste into an AI model or tool: give it a clear role, ' +
         'the goal and context, step-by-step instructions, constraints, the exact output format, and an example if useful. Put the final prompt in ' +
@@ -278,6 +282,7 @@ class Orchestrator {
         else if (e.type === 'meta') emit({ type: 'meta', model: e.model });
         else if (e.type === 'session') sessionId = e.id;
         else if (e.type === 'error') errors.push(e.text);
+        else if (e.type === 'limits') this.store.setLimits(providerId, e);
         else if (e.type === 'usage') usage = { input: (usage ? usage.input : 0) + e.input, output: (usage ? usage.output : 0) + e.output, cached: (usage ? usage.cached : 0) + e.cached };
       });
       // Some CLIs wait for an interactive sign-in when signed out; stop them at once instead.
@@ -517,13 +522,13 @@ class Orchestrator {
     fs.mkdirSync(cwd, { recursive: true });
     const prompt = this.buildPrompt(conv, text, attachments, { voice });
     const userMsg = { id: this.store.newId(), role: 'user', text, attachments, voice: !!voice, council: true, ts: Date.now() };
-    const aiMsg = { id: this.store.newId(), role: 'assistant', text: '', status: 'running', ts: Date.now(), trail: [], activity: [], council: [], category: 'council', routeSource: 'council' };
+    const aiMsg = { id: this.store.newId(), role: 'assistant', text: '', status: 'running', ts: Date.now(), trail: [], activity: [], council: [], category: opts.compare ? 'compare' : 'council', routeSource: 'council' };
     conv.messages.push(userMsg, aiMsg);
     if (!conv.title) conv.title = text.replace(/\s+/g, ' ').slice(0, 60);
     this.store.saveConversation(conv);
     const send = (e) => emit({ conversationId, messageId: aiMsg.id, ...e });
     send({ type: 'begin', userMessage: userMsg, aiMessage: aiMsg });
-    send({ type: 'plan', category: 'council', source: 'council', route: members });
+    send({ type: 'plan', category: opts.compare ? 'compare' : 'council', source: 'council', route: members });
 
     try {
       const results = await Promise.all(members.map(async (m) => {
@@ -550,7 +555,10 @@ class Orchestrator {
         return aiMsg;
       }
       let final = good[0], chair = good[0];
-      if (good.length > 1) {
+      if (opts.compare) {
+        // Side by side, no merging: the user wants to judge the models themselves.
+        final = { ...good[0], text: good.map((g) => `### ${modelLabelOf(g)}\n\n${g.text}`).join('\n\n---\n\n') };
+      } else if (good.length > 1) {
         chair = good.find((g) => g.provider === 'claude') || good[0];
         send({ type: 'status', key: 'council_merging' });
         const merged = await this.runOnce(chair.provider, chair.model, this.councilPrompt(text, good), {
@@ -562,12 +570,170 @@ class Orchestrator {
       Object.assign(aiMsg, { text: final.text, status: 'done', provider: chair.provider, providerLabel: chair.label, model: chair.model });
       this.store.saveConversation(conv);
       if (!opts.noLearn) this.learning = this.learnFrom(conv, opts.text, final.text).catch(() => null);
-      send({ type: 'done', text: aiMsg.text, provider: chair.provider, label: chair.label, model: chair.model, category: 'council', council: aiMsg.council, tokens: aiMsg.tokens });
+      send({ type: 'done', text: aiMsg.text, provider: chair.provider, label: chair.label, model: chair.model, category: opts.compare ? 'compare' : 'council', council: aiMsg.council, tokens: aiMsg.tokens });
       return aiMsg;
     } catch (e) {
       const cancelled = controller.signal.aborted;
       aiMsg.status = cancelled ? 'cancelled' : 'failed';
       if (!cancelled) aiMsg.error = String(e.message || e);
+      this.store.saveConversation(conv);
+      send({ type: cancelled ? 'cancelled' : 'failed', error: aiMsg.error, trail: aiMsg.trail });
+      return aiMsg;
+    } finally {
+      this.active.delete(conversationId);
+    }
+  }
+
+  cwdFor(conversationId) {
+    const conv = this.store.getConversation(conversationId);
+    const cwd = conv && conv.workspace && fs.existsSync(conv.workspace) ? conv.workspace : this.store.attachmentDir(conversationId);
+    fs.mkdirSync(cwd, { recursive: true });
+    return cwd;
+  }
+
+  /** Try providers in order until one answers. Returns the successful run or the last failure. */
+  async runWithFallback(order, prompt, ro) {
+    let last = { ok: false, failure: { kind: 'unavailable' }, text: '' };
+    for (const o of order) {
+      if (ro.signal && ro.signal.aborted) break;
+      if (!this.isReady(o.provider)) continue;
+      const model = this.resolveModel(o.provider, o.model || '');
+      const r = await this.runOnce(o.provider, model, prompt, ro);
+      if (r.ok) { this.store.countUsage(o.provider); return { ...r, provider: o.provider }; }
+      last = r;
+      if (r.failure.kind === 'limit') this.coolDown(o.provider, r.failure.resetAt);
+      if (r.failure.kind === 'auth') this.store.markAuth(o.provider, false);
+      if (r.failure.kind === 'cancelled') break;
+    }
+    return { ...last, provider: null };
+  }
+
+  /**
+   * Project mode (🏗): for something big (an app, a website). The strongest model plans; the work is done step
+   * by step in the project folder; a check-and-fix round proves it runs; a second, different model reviews it;
+   * findings are fixed. Every phase is shown live, and the whole run can be undone from the snapshot.
+   */
+  async project(opts, emit) {
+    const { conversationId, text, voice } = opts;
+    const conv = this.store.getConversation(conversationId);
+    if (!conv) throw new Error('conversation not found');
+    if (this.active.has(conversationId)) throw new Error('busy');
+    const controller = new AbortController();
+    this.active.set(conversationId, controller);
+    const s = this.store.getSettings();
+    const attachments = opts.attachments || [];
+    const cwd = this.cwdFor(conversationId);
+    const arabic = /[\u0600-\u06FF]/.test(text);
+    const L = arabic
+      ? { plan: 'الخطة', verify: 'التحقق', review: 'المراجعة', files: 'الملفات', ok: 'اشتغل وتم التحقق منه', notOk: 'بقيت ملاحظات', lgtm: 'ما لقى المراجع مشاكل', fixed: 'وتم إصلاح ملاحظاته', folder: 'المجلد' }
+      : { plan: 'Plan', verify: 'Verification', review: 'Review', files: 'Files', ok: 'runs and was verified', notOk: 'some issues remain', lgtm: 'the reviewer found no problems', fixed: 'and its findings were fixed', folder: 'Folder' };
+    const userMsg = { id: this.store.newId(), role: 'user', text, attachments, voice: !!voice, ts: Date.now() };
+    const aiMsg = { id: this.store.newId(), role: 'assistant', text: '', status: 'running', ts: Date.now(), trail: [], activity: [], category: 'project', routeSource: 'project', project: { title: '', steps: [], phase: 'plan' } };
+    conv.messages.push(userMsg, aiMsg);
+    if (!conv.title) conv.title = text.replace(/\s+/g, ' ').slice(0, 60);
+    this.store.saveConversation(conv);
+    const send = (e) => emit({ conversationId, messageId: aiMsg.id, ...e });
+    send({ type: 'begin', userMessage: userMsg, aiMessage: aiMsg });
+    send({ type: 'plan', category: 'project', source: 'project', route: [] });
+    const baseAuto = opts.autonomy || s.autonomy;
+    const buildAuto = baseAuto === 'safe' ? 'edit' : baseAuto;
+    const builders = [{ provider: 'claude', model: 'opus' }, { provider: 'codex', model: '' }, { provider: 'gemini', model: '@best' }];
+    const ro = (autonomy) => ({
+      cwd, autonomy, timeoutMs: s.timeoutMinutes * 60e3, signal: controller.signal,
+      emit: (e) => { if (e.type === 'activity') send({ type: 'activity', text: e.text }); if (e.type === 'tokens') addTokens(aiMsg, e); },
+    });
+    const goal = this.buildPrompt(conv, text, attachments, { voice });
+    const phase = (name, status) => { aiMsg.project.phase = name; send({ type: 'project-phase', phase: name, status }); };
+    const snapBase = s.snapshots !== false && conv.workspace && cwd === conv.workspace ? await this.snapshots.before(conversationId, cwd) : null;
+    const started = Date.now();
+    try {
+      // 1 — plan
+      phase('plan', 'running');
+      const pr = await this.runWithFallback(builders, [
+        'You are the lead engineer. Plan how to build what the user asked for, in the current folder (it may already contain files: read them first and build on them).',
+        'Return ONLY JSON, no prose: {"title":"short project name","steps":[{"title":"short step name","detail":"concrete work and files for this step"}],"verify":"the shell command(s) that prove it works (tests/build), or empty"}',
+        'Use 3 to 8 steps ordered so the project is runnable after every step. Prefer simple, dependency-light technology unless the request says otherwise.',
+        '', 'REQUEST:', goal].join('\n'), ro('safe'));
+      if (!pr.ok) throw Object.assign(new Error('plan_failed'), { failure: pr.failure });
+      let plan; try { plan = JSON.parse(/\{[\s\S]*\}/.exec(pr.text)[0]); } catch (_) { plan = null; }
+      const steps = plan && Array.isArray(plan.steps) && plan.steps.length ? plan.steps.slice(0, 8).map((x) => ({ title: String(x.title || '').slice(0, 80), detail: String(x.detail || x.title || '').slice(0, 600) })) : [{ title: arabic ? 'التنفيذ' : 'Build', detail: text }];
+      aiMsg.project = { title: String((plan && plan.title) || text).slice(0, 80), steps: steps.map((x) => ({ title: x.title, status: 'pending', summary: '' })), phase: 'build', verify: '' };
+      send({ type: 'project-plan', title: aiMsg.project.title, steps: aiMsg.project.steps, provider: pr.provider });
+
+      // 2 — build, step by step
+      phase('build', 'running');
+      let builder = pr.provider;
+      const order = () => [{ provider: builder, model: builders.find((b) => b.provider === builder).model }, ...builders.filter((b) => b.provider !== builder)];
+      for (let i = 0; i < steps.length; i++) {
+        aiMsg.project.steps[i].status = 'running'; send({ type: 'project-step', index: i, status: 'running' });
+        const r = await this.runWithFallback(order(), [
+          'You are building a project step by step. Overall request:', '<<<', text, '>>>',
+          'Plan:', ...steps.map((x, k) => `${k + 1}. ${x.title}`),
+          `Now do ONLY step ${i + 1} of ${steps.length}: ${steps[i].title} — ${steps[i].detail}`,
+          'Work directly in the current folder: create and edit real, complete files (no placeholders, no TODOs). Keep earlier steps\' work working. Do not ask questions.',
+          'When finished, reply with ONE short line saying what you did.',
+        ].join('\n'), ro(buildAuto));
+        if (!r.ok) { aiMsg.project.steps[i].status = 'failed'; send({ type: 'project-step', index: i, status: 'failed', summary: r.failure && r.failure.message || '' }); throw Object.assign(new Error('step_failed'), { failure: r.failure }); }
+        builder = r.provider;
+        aiMsg.project.steps[i] = { ...aiMsg.project.steps[i], status: 'done', summary: r.text.split('\n')[0].slice(0, 200), provider: r.provider };
+        send({ type: 'project-step', index: i, status: 'done', summary: aiMsg.project.steps[i].summary, provider: r.provider });
+      }
+
+      // 3 — check it really runs, fixing what fails (up to 2 rounds)
+      phase('verify', 'running');
+      let verified = false, verifyNote = '';
+      for (let round = 0; round < 2 && !verified; round++) {
+        const v = await this.runWithFallback(order(), [
+          'The project in this folder must satisfy this request:', '<<<', text, '>>>',
+          'Prove that it really works: run its checks' + (plan && plan.verify ? ` (suggested: ${String(plan.verify).slice(0, 200)})` : '') + ' — tests, build, or a quick run/lint. For a static website make sure every linked file exists and the JavaScript has no errors.',
+          'If something fails, FIX it now and check again.',
+          'The first line of your reply must be exactly VERIFIED if everything passes, otherwise ISSUES: followed by a short list of what is still broken.',
+        ].join('\n'), ro(buildAuto));
+        if (!v.ok) { verifyNote = v.failure && v.failure.message || ''; break; }
+        builder = v.provider;
+        verified = /^\s*VERIFIED/i.test(v.text);
+        verifyNote = v.text.replace(/^\s*(VERIFIED|ISSUES:?)/i, '').trim().slice(0, 400);
+        send({ type: 'project-phase', phase: 'verify', status: verified ? 'ok' : 'issues', round });
+      }
+      aiMsg.project.verified = verified;
+
+      // 4 — an independent review by a different model (read-only), then one fix round
+      phase('review', 'running');
+      const reviewers = builders.filter((b) => b.provider !== builder);
+      const rv = await this.runWithFallback(reviewers, [
+        'You are a strict senior reviewer. Review the project in this folder against the request. Read the files; do not change anything.',
+        'List only REAL problems: bugs, missing requirements, broken links/imports, security issues, things that would not run. At most 8 bullets, most important first, each naming the file. If it is good, reply exactly: LGTM',
+        '', 'REQUEST:', text].join('\n'), ro('safe'));
+      let reviewNote = L.lgtm, reviewer = rv.provider;
+      if (rv.ok && !/^\s*LGTM/i.test(rv.text)) {
+        send({ type: 'project-phase', phase: 'fix', status: 'running' });
+        const fx = await this.runWithFallback(order(), ['An independent reviewer found these problems in the project in this folder. Fix every real one now, then reply with one short line.', '', rv.text.slice(0, 4000)].join('\n'), ro(buildAuto));
+        reviewNote = fx.ok ? `${rv.text.split('\n').filter(Boolean).slice(0, 4).join(' ').slice(0, 300)} — ${L.fixed}` : rv.text.slice(0, 300);
+      } else if (!rv.ok) { reviewNote = '—'; reviewer = null; }
+      aiMsg.project.review = { provider: reviewer, note: reviewNote };
+
+      // 5 — summary
+      const { listFiles } = require('./workspace');
+      const files = listFiles(cwd, { max: 60 });
+      const label = (id) => (id && this.providers[id] ? this.providers[id].label : '—');
+      const out = [
+        `## ${aiMsg.project.title}`, '',
+        `**${L.plan}:**`, ...aiMsg.project.steps.map((x, i) => `${i + 1}. ✓ ${x.title}${x.summary ? ` — ${x.summary}` : ''}`), '',
+        `**${L.verify}:** ${verified ? '✅ ' + L.ok : '⚠️ ' + L.notOk}${verifyNote ? ` — ${verifyNote}` : ''}`,
+        `**${L.review}${reviewer ? ` (${label(reviewer)})` : ''}:** ${reviewNote}`, '',
+        `**${L.files}** (${files.length}): ${files.slice(0, 14).map((f) => '`' + f.path + '`').join('، ')}${files.length > 14 ? ' …' : ''}`,
+      ].join('\n');
+      aiMsg.text = out;
+      if (snapBase) { const changes = await this.snapshots.after(conversationId, cwd, snapBase); if (changes && changes.files.length) aiMsg.changes = changes; }
+      const images = this.collectImages(conversationId, cwd, started); if (images.length) aiMsg.images = images;
+      Object.assign(aiMsg, { status: 'done', provider: builder, providerLabel: label(builder), model: '' });
+      this.store.saveConversation(conv);
+      send({ type: 'done', text: out, provider: builder, label: label(builder), model: '', category: 'project', images: aiMsg.images, changes: aiMsg.changes, tokens: aiMsg.tokens, project: aiMsg.project });
+      return aiMsg;
+    } catch (e) {
+      const cancelled = controller.signal.aborted;
+      aiMsg.status = cancelled ? 'cancelled' : 'failed';
+      if (!cancelled) aiMsg.error = e.failure && e.failure.message ? e.failure.message : String(e.message || e);
       this.store.saveConversation(conv);
       send({ type: cancelled ? 'cancelled' : 'failed', error: aiMsg.error, trail: aiMsg.trail });
       return aiMsg;
@@ -700,6 +866,7 @@ class Orchestrator {
   }
 }
 
+function modelLabelOf(g) { return `${g.label}${g.model ? ` · ${g.model}` : ''}`; }
 function addTokens(msg, e) {
   const t0 = msg.tokens || { input: 0, output: 0, cached: 0 };
   msg.tokens = { input: t0.input + e.input, output: t0.output + e.output, cached: t0.cached + e.cached, estimated: !!(t0.estimated || e.estimated) };

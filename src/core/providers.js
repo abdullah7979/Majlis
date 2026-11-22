@@ -74,6 +74,10 @@ const claude = {
       const j = tryJson(line);
       if (!j) { emit({ type: 'text', text: line + '\n' }); return; }
       if (j.session_id) emit({ type: 'session', id: j.session_id });
+      if (j.type === 'rate_limit_event' && j.rate_limit_info) {
+        const r = j.rate_limit_info;
+        emit({ type: 'limits', window: r.rateLimitType || 'session', status: r.status || null, usedPct: r.utilization != null ? Math.round(r.utilization * (r.utilization <= 1 ? 100 : 1)) : null, resetsAt: r.resetsAt ? (r.resetsAt < 1e12 ? r.resetsAt * 1000 : r.resetsAt) : null });
+      }
       if (j.type === 'system' && j.subtype === 'init' && j.model) emit({ type: 'meta', model: j.model });
       else if (j.type === 'stream_event' && j.event) {
         const e = j.event;
@@ -141,6 +145,8 @@ const codex = {
         else if (it.type === 'web_search' && j.type === 'item.started') emit({ type: 'activity', text: `search: ${it.query || ''}` });
         else if (it.type === 'error' && it.message && !/Falling back|Reconnecting/i.test(it.message)) emit({ type: 'error', text: it.message });
       } else if (j.type === 'turn.completed' && j.usage) {
+        const rl = j.rate_limits || (j.msg && j.msg.rate_limits);
+        if (rl) for (const [w, v] of Object.entries(rl)) if (v && typeof v === 'object') emit({ type: 'limits', window: w, status: null, usedPct: v.used_percent != null ? Math.round(v.used_percent) : null, resetsAt: v.resets_in_seconds != null ? Date.now() + v.resets_in_seconds * 1000 : (v.resets_at ? v.resets_at * 1000 : null) });
         const u = j.usage, cached = u.cached_input_tokens || 0;
         emit({ type: 'usage', input: Math.max(0, (u.input_tokens || 0) - cached), cached, output: (u.output_tokens || 0) + (u.reasoning_output_tokens || 0) });
       } else if (j.type === 'turn.failed') emit({ type: 'error', text: (j.error && j.error.message) || 'turn failed' });

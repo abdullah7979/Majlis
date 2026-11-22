@@ -163,6 +163,19 @@ function main() {
     answer = process.env[`FAKE_REPLY_${name}`];
   } else if (/You maintain a short memory/.test(fullInput) && process.env[`FAKE_REPLY_${name}`]) {
     answer = process.env[`FAKE_REPLY_${name}`];
+  } else if (/You are the lead engineer/.test(fullInput)) {
+    answer = '{"title":"موقع تجريبي","steps":[{"title":"الهيكل","detail":"index.html"},{"title":"التنسيق","detail":"style.css"}],"verify":"node -v"}';
+  } else if (/You are building a project step by step/.test(fullInput)) {
+    const m = /Now do ONLY step (\d+)/.exec(fullInput);
+    if (m && m[1] === '1') fs.writeFileSync(path.join(process.cwd(), 'index.html'), '<!doctype html><title>t</title><h1>hello</h1>');
+    else fs.writeFileSync(path.join(process.cwd(), 'style.css'), 'h1{color:#c60}');
+    answer = `done step ${m ? m[1] : '?'}`;
+  } else if (/Prove that it really works/.test(fullInput)) {
+    answer = 'VERIFIED\nall good';
+  } else if (/You are a strict senior reviewer/.test(fullInput)) {
+    answer = process.env.FAKE_REVIEW || 'LGTM';
+  } else if (/An independent reviewer found these problems/.test(fullInput)) {
+    answer = 'fixed';
   } else if (/You are a router/.test(fullInput)) {
     answer = `{"category":"${process.env.FAKE_CLASSIFY || 'quick'}","reason":"fake"}`;
   } else {
@@ -171,6 +184,7 @@ function main() {
 
   if (name === 'claude') {
     console.log(JSON.stringify({ type: 'system', subtype: 'init', session_id: sid, model: model || 'claude-sonnet' }));
+    console.log(JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed', resetsAt: Math.floor(Date.now() / 1000) + 3600, rateLimitType: 'five_hour' } }));
     console.log(JSON.stringify({ type: 'assistant', session_id: sid, message: { content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'x.js' } }] } }));
     for (const part of [answer.slice(0, 5), answer.slice(5)]) console.log(JSON.stringify({ type: 'stream_event', session_id: sid, event: { type: 'content_block_delta', delta: { type: 'text_delta', text: part } } }));
     console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: answer, session_id: sid, usage: { input_tokens: 100, cache_creation_input_tokens: 20, cache_read_input_tokens: 3000, output_tokens: 45 } }));
