@@ -50,10 +50,12 @@ function load(model = TURBO) {
     };
     if (pipe) { try { await pipe.dispose(); } catch (_) {} pipe = null; }
     let device = await pickDevice();
+    // The 2 GB model runs only on the graphics card: on CPU it runs out of memory and breaks the runtime.
+    if (model !== TURBO && device !== 'webgpu') throw new Error('The accurate model needs a graphics card (WebGPU).');
     try {
       pipe = await tryLoad(device);
     } catch (e) {
-      if (device !== 'webgpu') throw e;
+      if (device !== 'webgpu' || model !== TURBO) throw e;
       device = 'wasm';
       pipe = await tryLoad(device);
     }
@@ -94,7 +96,7 @@ function cleanup(t) {
 }
 
 window.ASR = {
-  load, transcribe,
+  load, transcribe, hasGpu: async () => (await pickDevice()) === 'webgpu',
   status: () => ({ ...state }),
   onStatus: (fn) => { listeners.add(fn); return () => listeners.delete(fn); },
 };

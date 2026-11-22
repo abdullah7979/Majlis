@@ -778,6 +778,7 @@ function micTestField() {
   const model = h('select', { onchange: async (e) => { await saveSettings({ voice: { model: e.target.value } }); if (window.ASR) window.ASR.load(e.target.value).catch(() => {}); } },
     h('option', { value: 'onnx-community/whisper-large-v3-turbo' }, t('model_fast')), h('option', { value: 'onnx-community/whisper-large-v3-ONNX' }, t('model_accurate')));
   model.value = voiceSettings().model || 'onnx-community/whisper-large-v3-turbo';
+  if (window.ASR) window.ASR.hasGpu().then((ok) => { if (!ok) { model.options[1].disabled = true; model.options[1].textContent += ` — ${t('no_gpu')}`; if (model.value.endsWith('ONNX')) model.value = model.options[0].value; } });
   const vocab = h('textarea', { class: 'memory', rows: 2, dir: 'auto', placeholder: t('vocab_ph') }); vocab.value = voiceSettings().vocabulary || '';
   vocab.onchange = () => saveSettings({ voice: { vocabulary: vocab.value } });
   return h('div', {},

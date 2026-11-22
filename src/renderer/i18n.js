@@ -212,3 +212,6 @@ Object.assign(window.I18N.ar, {
   speech_model: 'نموذج الصوت', model_fast: 'سريع (١٫٣ جيجا)', model_accurate: 'الأدق (٢٫١ جيجا، يحتاج كرت شاشة)',
   speech_model_help: 'النموذج الأدق يفهم العربي أحسن، يتحمّل مرة وحدة (حوالي ٢ جيجا) وأبطأ شوي. لو ما اشتغل على الجهاز يرجع مجلس للسريع تلقائياً.',
 });
+
+Object.assign(window.I18N.en, { no_gpu: 'no graphics card found' });
+Object.assign(window.I18N.ar, { no_gpu: 'ما لقيت كرت شاشة' });
