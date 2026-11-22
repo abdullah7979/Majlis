@@ -141,4 +141,5 @@ test('prompt tools: "write me a prompt" goes to the prompt engineer; ✨ improve
   assert.ok(c.args.includes('haiku'));
   assert.match(c.input, /Rewrite the user's rough request/);
   assert.match(c.input, /Write it in Arabic/);
+  assert.match(c.input, /<<<\nابي موقع لمطعمي\n>>>/, 'the user\'s own text reaches the model');
 });

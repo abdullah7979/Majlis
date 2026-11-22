@@ -412,7 +412,7 @@ class Orchestrator {
           emit: (e) => {
             if (e.type === 'activity') { aiMsg.activity.push(e.text); if (aiMsg.activity.length > 200) aiMsg.activity.shift(); }
             if (e.type === 'text') aiMsg.text += e.text;
-            if (e.type === 'tokens') { const t0 = aiMsg.tokens || { input: 0, output: 0, cached: 0 }; aiMsg.tokens = { input: t0.input + e.input, output: t0.output + e.output, cached: t0.cached + e.cached, estimated: !!(t0.estimated || e.estimated) }; }
+            if (e.type === 'tokens') addTokens(aiMsg, e);
             send(e);
           },
         });
@@ -430,7 +430,7 @@ class Orchestrator {
           }
           this.store.saveConversation(conv);
           if (!opts.noLearn) this.learning = this.learnFrom(conv, text, r.text).catch(() => null);
-          send({ type: 'done', text: r.text, provider: step.provider, label: p.label, model: r.model, category: plan.category, images: aiMsg.images, changes: aiMsg.changes });
+          send({ type: 'done', text: r.text, provider: step.provider, label: p.label, model: r.model, category: plan.category, images: aiMsg.images, changes: aiMsg.changes, tokens: aiMsg.tokens });
           return aiMsg;
         }
         const f = r.failure;
@@ -531,7 +531,7 @@ class Orchestrator {
         send({ type: 'council-start', provider: m.provider, label: p.label, model: m.model });
         const r = await this.runOnce(m.provider, m.model, prompt, {
           cwd, autonomy: 'safe', timeoutMs: s.timeoutMinutes * 60e3, signal: controller.signal,
-          emit: (e) => { if (e.type === 'activity') send({ type: 'council-activity', provider: m.provider, text: e.text }); },
+          emit: (e) => { if (e.type === 'activity') send({ type: 'council-activity', provider: m.provider, text: e.text }); if (e.type === 'tokens') addTokens(aiMsg, e); },
         });
         if (r.ok) { this.store.countUsage(m.provider); if (!this.store.authKnownGood(m.provider)) this.store.markAuth(m.provider, true); }
         else if (r.failure.kind === 'limit') this.coolDown(m.provider, r.failure.resetAt);
@@ -555,13 +555,14 @@ class Orchestrator {
         send({ type: 'status', key: 'council_merging' });
         const merged = await this.runOnce(chair.provider, chair.model, this.councilPrompt(text, good), {
           cwd, autonomy: 'safe', timeoutMs: s.timeoutMinutes * 60e3, signal: controller.signal,
-          emit: (e) => { if (e.type === 'text') { aiMsg.text += e.text; send(e); } },
+          emit: (e) => { if (e.type === 'text') { aiMsg.text += e.text; send(e); } if (e.type === 'tokens') addTokens(aiMsg, e); },
         });
         if (merged.ok) final = { ...chair, text: merged.text };
       }
       Object.assign(aiMsg, { text: final.text, status: 'done', provider: chair.provider, providerLabel: chair.label, model: chair.model });
       this.store.saveConversation(conv);
-      send({ type: 'done', text: aiMsg.text, provider: chair.provider, label: chair.label, model: chair.model, category: 'council', council: aiMsg.council });
+      if (!opts.noLearn) this.learning = this.learnFrom(conv, opts.text, final.text).catch(() => null);
+      send({ type: 'done', text: aiMsg.text, provider: chair.provider, label: chair.label, model: chair.model, category: 'council', council: aiMsg.council, tokens: aiMsg.tokens });
       return aiMsg;
     } catch (e) {
       const cancelled = controller.signal.aborted;
@@ -604,7 +605,7 @@ class Orchestrator {
       'Keep the user\'s intent exactly; add the missing structure: goal, context, specific requirements, constraints, and the desired output format.',
       'Do not answer the request. Do not add explanations. Output only the improved prompt text, no quotes, no code fences.',
       arabic ? 'Write it in Arabic (natural, clear Arabic; keep technical terms as they are).' : 'Write it in the same language as the request.',
-      '', 'Rough request:', ', text.slice(0, 6000), ',
+      '', 'Rough request:', '<<<', text.slice(0, 6000), '>>>',
     ].join('\n');
     const r = await this.runOnce(helper.provider, this.resolveModel(helper.provider, helper.model), instruction, {
       cwd: os.tmpdir(), autonomy: 'safe', timeoutMs: 90000, emit: () => {},
@@ -662,6 +663,11 @@ class Orchestrator {
     if (!r.ok && r.failure.kind === 'auth') this.store.markAuth(providerId, false);
     return r.ok ? { ok: true, text: r.text.slice(0, 200) } : { ok: false, kind: r.failure.kind, message: r.failure.message };
   }
+}
+
+function addTokens(msg, e) {
+  const t0 = msg.tokens || { input: 0, output: 0, cached: 0 };
+  msg.tokens = { input: t0.input + e.input, output: t0.output + e.output, cached: t0.cached + e.cached, estimated: !!(t0.estimated || e.estimated) };
 }
 
 /** Rough token count when a CLI reports none (~4 chars/token for Latin text, ~2.5 for Arabic). */

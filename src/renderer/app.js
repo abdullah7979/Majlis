@@ -358,7 +358,7 @@ function onChatEvent(e) {
     case 'retry': if (e.reason === 'bad_model') m.notice = t('retry_model'); break;
     case 'skip': (m.trail = m.trail || []).push({ provider: e.provider, model: e.model, outcome: e.why, until: e.until }); break;
     case 'fallback': (m.trail = m.trail || []).push({ provider: e.provider, model: m.liveModel, outcome: e.kind, until: e.until, message: e.message }); m.text = ''; break;
-    case 'done': Object.assign(m, { status: 'done', text: e.text, provider: e.provider, model: e.model, providerLabel: e.label, images: e.images || m.images, changes: e.changes || m.changes, council: e.council || m.council }); break;
+    case 'done': Object.assign(m, { status: 'done', text: e.text, provider: e.provider, model: e.model, providerLabel: e.label, images: e.images || m.images, changes: e.changes || m.changes, council: e.council || m.council, tokens: e.tokens || m.tokens }); break;
     case 'council-start': (m.council = m.council || []).push({ provider: e.provider, label: e.label, model: e.model, kind: 'running', ok: false }); m.statusText = t('council_thinking'); break;
     case 'council-member': { m.council = m.council || []; const i = m.council.findIndex((x) => x.provider === e.provider); const v = { ...e }; delete v.type; if (i >= 0) m.council[i] = v; else m.council.push(v); break; }
     case 'council-activity': (m.activity = m.activity || []).push(`${providerLabel(e.provider)} · ${e.text}`); break;
@@ -1040,10 +1040,10 @@ async function boot() {
   $('#sendBtn').onclick = sendCurrent;
   $('#attachBtn').onclick = async () => { const f = await api.dialog.pickFiles(); S.pendingFiles.push(...f); renderAttachments(); };
   document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') { e.preventDefault(); showWelcome(); }
-    if ((e.ctrlKey || e.metaKey) && e.key === ',') { e.preventDefault(); openSettings(); }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'm') { e.preventDefault(); listen(); }
-    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'i') { e.preventDefault(); improveCurrent(); }
+    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyN') { e.preventDefault(); showWelcome(); }
+    if ((e.ctrlKey || e.metaKey) && e.code === 'Comma') { e.preventDefault(); openSettings(); }
+    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyM') { e.preventDefault(); listen(); }
+    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyI') { e.preventDefault(); improveCurrent(); }
     if (e.key === 'Escape' && (V.mode || V.state !== 'idle')) stopVoice();
     if (e.key === 'Escape' && !$('#overlay').classList.contains('hidden') && S.settings.onboarded) closeOverlay();
   });
