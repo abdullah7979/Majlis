@@ -1,0 +1,15 @@
+name: Probe speech models
+
+on:
+  workflow_dispatch:
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    steps:
+      - name: List ONNX files of candidate Whisper models
+        run: |
+          for m in onnx-community/whisper-large-v3-ONNX onnx-community/whisper-large-v3-turbo; do
+            echo "===== $m"
+            curl -sS "https://huggingface.co/api/models/$m/tree/main/onnx" | python3 -c "import sys,json; [print(f['path'], f.get('size')) for f in json.load(sys.stdin)]"
+          done
