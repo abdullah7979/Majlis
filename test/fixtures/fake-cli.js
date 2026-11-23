@@ -155,7 +155,7 @@ function main() {
     } else fs.writeFileSync(path.join(process.cwd(), 'image_1.png'), png);
   }
   let answer;
-  const at = fullInput.match(/^@(\S+)/m);
+  const at = fullInput.match(/^(?:@|Audio file: )(\S+)/m);
   if (/Transcribe the speech/.test(fullInput)) {
     if (!at || !fs.existsSync(at[1])) die('file not found in workspace', 1);
     answer = process.env.FAKE_TRANSCRIPT || 'Here is the transcript: "ابني لي صفحة هبوط لمطعمي"';

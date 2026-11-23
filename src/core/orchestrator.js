@@ -11,7 +11,7 @@ const { classifyFailure, looksLikeLimitNotice } = require('./errors');
 const { heuristicClassify, buildClassifierPrompt, parseClassifierOutput } = require('./classifier');
 const { COUNCIL_MEMBERS } = require('./defaults');
 const { Snapshots } = require('./snapshots');
-const { readProjectMemory } = require('./workspace');
+const { readProjectMemory, collectFiles } = require('./workspace');
 
 // Short replies that continue the current task rather than start a new one.
 const FOLLOW_UP_RE = /^\s*(نعم|ايوه|إيوه|أيوه|ايه|إيه|اي|أي|اوكي|أوكي|تمام|طيب|زين|حلو|ممتاز|كمل|كمّل|استمر|كمله|كملها|كمّلها|زد|زيد|أكثر|اكثر|عدل|عدّل|عدلها|عدّلها|غيره|غيّره|غيرها|سو|سوه|سوّه|سوها|سويها|ابدأ|ابدا|يلا|نفذ|نفّذ|طبق|طبّق|جرب|جرّب|صحح|صلحها|صلّحها|لا|ok|okay|yes|yep|sure|continue|go on|go ahead|do it|more|again|retry|fix it|no)(?=$|[\s.,!؟?،])/i;
@@ -137,6 +137,29 @@ class Orchestrator {
   isReady(id) { return this.isUsable(id) && !this.knownSignedOut(id); }
 
   // ------------------------------------------------------------ routing
+  /**
+   * Cloud-quality speech recognition through the user's Gemini subscription (it understands Arabic far better than the
+   * small on-device model). The recording lives only in the app's private folder and is deleted right after.
+   */
+  async transcribeCloud(bytes, language = 'auto') {
+    if (!this.isReady('gemini')) return { ok: false, reason: 'unavailable' };
+    const dir = path.join(this.store.attachDir, '_voice'); fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `rec-${Date.now()}.wav`);
+    fs.writeFileSync(file, Buffer.from(bytes));
+    try {
+      const lang = language === 'ar' ? 'Arabic' : language === 'en' ? 'English' : 'the language spoken (usually Arabic or English)';
+      const r = await this.runOnce('gemini', this.resolveModel('gemini', '@fast'), [
+        `Transcribe the speech in this audio file exactly as spoken. Language: ${lang}.`,
+        'Write Arabic in correct standard Arabic spelling, keep the speaker\'s own words and dialect, and write English technical terms in Latin letters.',
+        'Output ONLY the transcript: no quotes, no explanation, no translation. If you cannot hear any speech, output exactly: [no speech]',
+        `Audio file: ${file}`].join('\n'), { cwd: dir, autonomy: 'safe', timeoutMs: 45000, emit: () => {} });
+      if (!r.ok) { if (r.failure && r.failure.kind === 'limit') this.coolDown('gemini', r.failure.resetAt); return { ok: false, reason: r.failure ? r.failure.kind : 'failed' }; }
+      const text = r.text.replace(/^["“”«»\s]+|["“”«»\s]+$/g, '').trim();
+      if (!text || /^\[?no speech\]?$/i.test(text) || /cannot|can't|unable to (access|listen|process)|لا أستطيع/i.test(text) && text.length > 60) return { ok: false, reason: 'no_audio_support', text };
+      return { ok: true, text };
+    } finally { try { fs.rmSync(file, { force: true }); } catch (_) {} }
+  }
+
   pickHelper(candidates) { return candidates.find((c) => this.isReady(c.provider)) || null; }
 
   /**
@@ -242,6 +265,10 @@ class Orchestrator {
     }
     const rules = readProjectMemory(conv.workspace);
     if (rules) prompt += `(Project rules from MAJLIS.md — follow them:\n${rules})\n\n`;
+    if (this.isSandboxed(conv)) {
+      prompt += '(You work in a private sandbox folder that belongs to this chat. To give the user a file, a website, a document or a design, create it as a real file in the CURRENT folder: Majlis shows it to the user right inside the chat. ' +
+        'Never read, list, search, open or change anything outside the current folder, never touch the user\'s other files or system settings, and never try to open programs or windows on the user\'s computer.)\n\n';
+    }
     if (promptEng) {
       prompt += '(Act as an expert prompt engineer. Write a ready-to-use prompt the user can paste into an AI model or tool: give it a clear role, ' +
         'the goal and context, step-by-step instructions, constraints, the exact output format, and an example if useful. Put the final prompt in ' +
@@ -347,8 +374,7 @@ class Orchestrator {
     this.active.set(conversationId, controller);
     const s = this.store.getSettings();
     const attachments = opts.attachments || [];
-    const cwd = conv.workspace && fs.existsSync(conv.workspace) ? conv.workspace : this.store.attachmentDir(conversationId);
-    fs.mkdirSync(cwd, { recursive: true });
+    const cwd = this.cwdFor(conversationId);
     conv.sessions = conv.sessions || {};
 
     const userMsg = { id: this.store.newId(), role: 'user', text, attachments, voice: !!voice, ts: Date.now() };
@@ -382,9 +408,9 @@ class Orchestrator {
       const promptEng = plan.category === 'prompt';
       const freshPrompt = this.buildPrompt(conv, text, attachments, { voice, image, promptEng });
       const baseAutonomy = opts.autonomy || s.autonomy;
-      const autonomy = image && baseAutonomy === 'safe' ? 'edit' : baseAutonomy;
+      const autonomy = this.sandboxAutonomy(conv, image && baseAutonomy === 'safe' ? 'edit' : baseAutonomy, !!opts.autonomy);
       const started = Date.now();
-      const snapBase = s.snapshots !== false && conv.workspace && cwd === conv.workspace && autonomy !== 'safe'
+      const snapBase = s.snapshots !== false && conv.workspace && cwd === conv.workspace && autonomy !== 'safe' && !this.isSandboxed(conv)
         ? await this.snapshots.before(conversationId, cwd) : null;
       Object.assign(aiMsg, { category: plan.category, reason: plan.reason, routeSource: plan.source });
       send({ type: 'plan', category: plan.category, reason: plan.reason, source: plan.source, route: plan.route });
@@ -429,13 +455,15 @@ class Orchestrator {
           if (r.sessionId) conv.sessions[step.provider] = { id: r.sessionId, model: r.model || '', count: conv.messages.length };
           const images = this.collectImages(conversationId, cwd, started);
           if (images.length) aiMsg.images = images;
+          const made = collectFiles(cwd, started);
+          if (made.files.length) { aiMsg.files = made.files; aiMsg.entry = made.entry; }
           if (snapBase) {
             const changes = await this.snapshots.after(conversationId, cwd, snapBase);
             if (changes && changes.files.length) aiMsg.changes = changes;
           }
           this.store.saveConversation(conv);
           if (!opts.noLearn) this.learning = this.learnFrom(conv, text, r.text).catch(() => null);
-          send({ type: 'done', text: r.text, provider: step.provider, label: p.label, model: r.model, category: plan.category, images: aiMsg.images, changes: aiMsg.changes, tokens: aiMsg.tokens });
+          send({ type: 'done', text: r.text, provider: step.provider, label: p.label, model: r.model, category: plan.category, images: aiMsg.images, files: aiMsg.files, entry: aiMsg.entry, changes: aiMsg.changes, tokens: aiMsg.tokens });
           return aiMsg;
         }
         const f = r.failure;
@@ -518,8 +546,7 @@ class Orchestrator {
     this.active.set(conversationId, controller);
     const s = this.store.getSettings();
     const attachments = opts.attachments || [];
-    const cwd = conv.workspace && fs.existsSync(conv.workspace) ? conv.workspace : this.store.attachmentDir(conversationId);
-    fs.mkdirSync(cwd, { recursive: true });
+    const cwd = this.cwdFor(conversationId);
     const prompt = this.buildPrompt(conv, text, attachments, { voice });
     const userMsg = { id: this.store.newId(), role: 'user', text, attachments, voice: !!voice, council: true, ts: Date.now() };
     const aiMsg = { id: this.store.newId(), role: 'assistant', text: '', status: 'running', ts: Date.now(), trail: [], activity: [], council: [], category: opts.compare ? 'compare' : 'council', routeSource: 'council' };
@@ -586,9 +613,18 @@ class Orchestrator {
 
   cwdFor(conversationId) {
     const conv = this.store.getConversation(conversationId);
-    const cwd = conv && conv.workspace && fs.existsSync(conv.workspace) ? conv.workspace : this.store.attachmentDir(conversationId);
+    const real = conv && conv.workspace && this.store.getSettings().sandbox === false && fs.existsSync(conv.workspace);
+    const cwd = real ? conv.workspace : this.store.attachmentDir(conversationId);
     fs.mkdirSync(cwd, { recursive: true });
     return cwd;
+  }
+  /** Private-folder mode (default): the models never get a folder of the user's PC; results are shown in the chat. */
+  isSandboxed(conv) { return this.store.getSettings().sandbox !== false || !conv || !conv.workspace; }
+  /** In the sandbox, writing files is safe (they stay in the app's own folder), but full-trust mode is never used. */
+  sandboxAutonomy(conv, requested, explicit) {
+    if (!this.isSandboxed(conv)) return requested;
+    if (requested === 'full') return 'edit';
+    return explicit ? requested : 'edit';
   }
 
   /** Try providers in order until one answers. Returns the successful run or the last failure. */
@@ -636,24 +672,26 @@ class Orchestrator {
     send({ type: 'begin', userMessage: userMsg, aiMessage: aiMsg });
     send({ type: 'plan', category: 'project', source: 'project', route: [] });
     const baseAuto = opts.autonomy || s.autonomy;
-    const buildAuto = baseAuto === 'safe' ? 'edit' : baseAuto;
-    const builders = [{ provider: 'claude', model: 'opus' }, { provider: 'codex', model: '' }, { provider: 'gemini', model: '@best' }];
+    const buildAuto = this.sandboxAutonomy(conv, baseAuto === 'safe' ? 'edit' : baseAuto, true);
+    const planners = [{ provider: 'claude', model: 'opus' }, { provider: 'codex', model: '' }, { provider: 'gemini', model: '@best' }];
+    // Planning and review need the strongest model; the building steps use the fast tier so a whole project takes minutes, not an hour.
+    const builders = [{ provider: 'claude', model: 'sonnet' }, { provider: 'codex', model: '' }, { provider: 'gemini', model: '@best' }];
     const ro = (autonomy) => ({
       cwd, autonomy, timeoutMs: s.timeoutMinutes * 60e3, signal: controller.signal,
       emit: (e) => { if (e.type === 'activity') send({ type: 'activity', text: e.text }); if (e.type === 'tokens') addTokens(aiMsg, e); },
     });
     const goal = this.buildPrompt(conv, text, attachments, { voice });
     const phase = (name, status) => { aiMsg.project.phase = name; send({ type: 'project-phase', phase: name, status }); };
-    const snapBase = s.snapshots !== false && conv.workspace && cwd === conv.workspace ? await this.snapshots.before(conversationId, cwd) : null;
+    const snapBase = s.snapshots !== false && conv.workspace && cwd === conv.workspace && !this.isSandboxed(conv) ? await this.snapshots.before(conversationId, cwd) : null;
     const started = Date.now();
     try {
       // 1 — plan
       phase('plan', 'running');
-      const pr = await this.runWithFallback(builders, [
+      const pr = await this.runWithFallback(planners, [
         'You are the lead engineer. Plan how to build what the user asked for, in the current folder (it may already contain files: read them first and build on them).',
         'Return ONLY JSON, no prose: {"title":"short project name","steps":[{"title":"short step name","detail":"concrete work for this step","files":["files this step creates or edits"],"group":1}],"verify":"the shell command(s) that prove it works (tests/build), or empty"}',
         'Use 3 to 8 steps ordered so the project is runnable after every step. Prefer simple, dependency-light technology unless the request says otherwise.',
-        '"group" is a number: steps with the SAME group number run at the same time by different engineers, so give them the same group ONLY when they touch completely different files and do not depend on each other (e.g. separate pages, separate modules). Foundation steps come first in their own group.',
+        '"group" is a number: steps with the SAME group number run at the same time by different engineers, so give them the same group ONLY when they touch completely different files and do not depend on each other (e.g. separate pages, separate modules). Foundation steps (shared config, data files, base layout) come first in their own group. Be generous with parallelism: when the project allows (separate pages, modules, backend vs frontend vs tests), put at least half of the steps in shared groups.',
         'If the folder already contains a project, this is a change request: plan ONLY the changes (1 to 3 steps), reuse what exists, and never rebuild from scratch.',
         '', 'REQUEST:', goal].join('\n'), ro('safe'));
       if (!pr.ok) throw Object.assign(new Error('plan_failed'), { failure: pr.failure });
@@ -718,7 +756,7 @@ class Orchestrator {
         send({ type: 'project-phase', phase: 'verify', status: stat.problems.length ? 'issues' : 'ok', round });
       }
       verified = stat.problems.length === 0;
-      if (opts.allowRun) {
+      if (opts.allowRun && !this.isSandboxed(conv)) {
         // The user allowed commands in this project: really run its tests/build/start, and fix what fails.
         send({ type: 'activity', text: 'Running the project for real' });
         const v = await this.runWithFallback(order(), [
@@ -761,9 +799,10 @@ class Orchestrator {
       aiMsg.text = out;
       if (snapBase) { const changes = await this.snapshots.after(conversationId, cwd, snapBase); if (changes && changes.files.length) aiMsg.changes = changes; }
       const images = this.collectImages(conversationId, cwd, started); if (images.length) aiMsg.images = images;
+      { const made = collectFiles(cwd, started, { max: 60 }); if (made.files.length) { aiMsg.files = made.files; aiMsg.entry = made.entry; } }
       Object.assign(aiMsg, { status: 'done', provider: builder, providerLabel: label(builder), model: '' });
       this.store.saveConversation(conv);
-      send({ type: 'done', text: out, provider: builder, label: label(builder), model: '', category: 'project', images: aiMsg.images, changes: aiMsg.changes, tokens: aiMsg.tokens, project: aiMsg.project });
+      send({ type: 'done', text: out, provider: builder, label: label(builder), model: '', category: 'project', images: aiMsg.images, files: aiMsg.files, entry: aiMsg.entry, changes: aiMsg.changes, tokens: aiMsg.tokens, project: aiMsg.project });
       return aiMsg;
     } catch (e) {
       const cancelled = controller.signal.aborted;

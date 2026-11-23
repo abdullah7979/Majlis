@@ -14,7 +14,7 @@ const fake = installFakeClis();
 async function setup() {
   fake.reset();
   const store = new Store(tempDir());
-  store.updateSettings({ onboarded: true, learn: false, snapshots: false });
+  store.updateSettings({ onboarded: true, learn: false, snapshots: false, sandbox: false });
   const orch = new Orchestrator(store); await orch.refreshCatalog(true);
   return { store, orch };
 }
@@ -162,4 +162,46 @@ test('real-run option adds a genuine run-and-fix pass; zip export and scoreboard
   assert.ok(fs.statSync(z).size > 50);
   store.addFeedback('code', 'claude', true); store.addFeedback('code', 'claude', true); store.addFeedback('code', 'gemini', false);
   assert.deepEqual(store.scoreboard().code, { claude: 2, gemini: -1 });
+});
+
+test('private mode (default): models stay in the app folder, results are collected for the chat, no PC folder is used', async () => {
+  fake.reset();
+  const store = new Store(tempDir());
+  store.updateSettings({ onboarded: true, learn: false }); // sandbox defaults to on
+  const orch = new Orchestrator(store); await orch.refreshCatalog(true);
+  const userFolder = tempDir();
+  const conv = store.createConversation({ title: '', workspace: userFolder });
+  const cwd = orch.cwdFor(conv.id);
+  assert.notEqual(cwd, userFolder);
+  assert.ok(cwd.startsWith(store.attachDir));
+  assert.equal(orch.sandboxAutonomy(conv, 'full', false), 'edit');
+  assert.equal(orch.sandboxAutonomy(conv, 'safe', false), 'edit');
+  const msg = await orch.project({ conversationId: conv.id, text: 'site', allowRun: true }, () => {});
+  assert.equal(msg.status, 'done');
+  assert.ok(msg.files.some((f) => f.rel === 'index.html' && f.kind === 'html'));
+  assert.equal(msg.entry, 'index.html');
+  assert.notEqual(msg.project.ran, true, 'no real command execution while private mode is on');
+  assert.deepEqual(fs.readdirSync(userFolder), [], 'nothing was written to the user folder');
+  assert.match(orch.buildPrompt(conv, 'hi', [], {}), /private sandbox folder/);
+});
+
+test('reading a produced file is confined to the project folder', () => {
+  const dir = tempDir();
+  fs.writeFileSync(path.join(dir, 'a.js'), 'console.log(1)');
+  fs.writeFileSync(path.join(dir, 'p.bin'), Buffer.from([0, 1, 2]));
+  assert.equal(ws.readFileSafe(dir, 'a.js').text, 'console.log(1)');
+  assert.equal(ws.readFileSafe(dir, 'p.bin').binary, true);
+  assert.throws(() => ws.readFileSafe(dir, '../../etc/passwd'), /outside/);
+});
+
+test('cloud transcription: audio goes to Gemini from the private folder and the recording is deleted afterwards', async () => {
+  process.env.FAKE_TRANSCRIPT = 'ابنِ لي موقعا لمحل قهوة';
+  try {
+    const { store, orch } = await setup();
+    const r = await orch.transcribeCloud(Buffer.from('RIFFxxxx'), 'ar');
+    assert.equal(r.ok, true);
+    assert.equal(r.text, 'ابنِ لي موقعا لمحل قهوة');
+    const dir = path.join(store.attachDir, '_voice');
+    assert.deepEqual(fs.readdirSync(dir), []);
+  } finally { delete process.env.FAKE_TRANSCRIPT; }
 });

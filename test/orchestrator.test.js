@@ -16,7 +16,7 @@ const fake = installFakeClis();
 async function setup(settings = {}) {
   fake.reset();
   const store = new Store(tempDir());
-  store.updateSettings({ onboarded: true, learn: false, ...settings });
+  store.updateSettings({ onboarded: true, learn: false, sandbox: false, ...settings });
   const orch = new Orchestrator(store);
   await orch.refreshCatalog(true);
   fake.reset();
@@ -299,7 +299,7 @@ test('settings from older versions (retired models, Gemini CLI) are migrated', a
   fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ onboarded: true, routes: { quick: [{ provider: 'gemini', model: 'gemini-2.5-flash' }] }, voice: { model: 'gemini-2.5-flash', autoSend: false } }));
   const store = new Store(dir);
   assert.equal(store.getSettings().routes.quick[0].model, '@flash');
-  assert.equal(store.getSettings().voice.engine, 'whisper');
+  assert.equal(store.getSettings().voice.engine, 'auto');
   assert.equal(store.getSettings().voice.autoSend, false);
   assert.equal(store.getSettings().onboarded, true);
 });

@@ -34,13 +34,19 @@ class Store {
     const raw = readJson(this.settingsFile, {});
     this.settings = deepMerge(DEFAULT_SETTINGS, raw);
     // v0.3 migration: routes from older versions pointed at retired model names (gemini-2.5-flash...).
-    if (Object.keys(raw).length && (!raw.schema || raw.schema < DEFAULT_SETTINGS.schema)) {
+    if (Object.keys(raw).length && (!raw.schema || raw.schema < 6)) {
       // v0.3: retired model names. v0.4: Gemini CLI -> Antigravity CLI. v0.5: new role-based routes.
       this.settings.routes = DEFAULT_SETTINGS.routes;
       this.settings.voice = { ...DEFAULT_SETTINGS.voice, ...(raw.voice || {}), model: DEFAULT_SETTINGS.voice.model };
       delete this.settings.classifier;
       this.settings.schema = DEFAULT_SETTINGS.schema;
       if (!raw.schema || raw.schema < 4) this._migratedGemini = true;
+      try { writeJson(this.settingsFile, this.settings); } catch (_) {}
+    }
+    // v0.11: speech engine 'auto' (Gemini first, on-device Whisper as backup) replaces the Whisper-only default.
+    if (Object.keys(raw).length && (!raw.schema || raw.schema < 7)) {
+      this.settings.voice = { ...this.settings.voice, engine: 'auto' };
+      this.settings.schema = DEFAULT_SETTINGS.schema;
       try { writeJson(this.settingsFile, this.settings); } catch (_) {}
     }
     this.state = deepMerge({ cooldowns: {}, usage: {}, learning: {}, auth: {}, models: {}, tokens: {}, limits: {} }, readJson(this.stateFile, {}));

@@ -1,5 +1,5 @@
 'use strict';
-const { Watcher, initProjectMemory, exportZip } = require('../core/workspace');
+const { Watcher, initProjectMemory, exportZip, readFileSafe } = require('../core/workspace');
 const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, nativeImage, Notification, session, net } = require('electron');
 const { installAgy } = require('../core/installers');
 const path = require('path');
@@ -148,6 +148,7 @@ function registerIpc() {
   h('chat:council', startChat('council'));
   h('chat:compare', startChat('compare'));
   h('chat:project', startChat('project'));
+  h('voice:cloud', (bytes, language) => orch.transcribeCloud(bytes, language));
   h('voice:fix', (text, conversationId) => orch.fixTranscript(String(text || ''), { conversationId }));
   h('chat:improve', (text) => orch.improvePrompt(String(text || '')));
 
@@ -228,17 +229,33 @@ function registerIpc() {
     const { readProjectMemory } = require('../core/workspace');
     return { dir, files: snap.files, entry: snap.entry, hasRules: !!readProjectMemory(dir) };
   });
-  h('ws:export-zip', (conversationId) => { const z = exportZip(orch.cwdFor(conversationId), app.getPath('downloads'), (store.getConversation(conversationId) || {}).title); shell.showItemInFolder(z); return z; });
-  h('ws:publish', (conversationId) => { const dir = orch.cwdFor(conversationId); shell.openExternal('https://app.netlify.com/drop'); shell.openPath(dir); return true; });
+  h('ws:export-zip', async (conversationId) => {
+    const c = store.getConversation(conversationId);
+    const tmp = exportZip(orch.cwdFor(conversationId), app.getPath('temp'), c && c.title);
+    const r = await dialog.showSaveDialog(win, { defaultPath: path.basename(tmp), filters: [{ name: 'ZIP', extensions: ['zip'] }] });
+    if (r.canceled || !r.filePath) { try { fs.rmSync(tmp, { force: true }); } catch (_) {} return null; }
+    fs.copyFileSync(tmp, r.filePath); try { fs.rmSync(tmp, { force: true }); } catch (_) {}
+    return r.filePath;
+  });
+  h('ws:publish', (conversationId) => { const dir = orch.cwdFor(conversationId); shell.openExternal('https://app.netlify.com/drop'); return true; });
   h('conv:export-md', async (conversationId) => {
     const c = store.getConversation(conversationId); if (!c) return null;
     const md = [`# ${c.title || 'Majlis'}`, '', ...c.messages.map((m) => `## ${m.role === 'user' ? '🧑' : `🤖 ${m.providerLabel || 'Majlis'}${m.model ? ' · ' + m.model : ''}`}\n\n${m.text || ''}\n`)].join('\n');
-    const f = path.join(app.getPath('downloads'), `${(c.title || 'majlis').replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 50) || 'majlis'}.md`);
-    fs.writeFileSync(f, md, 'utf8'); shell.showItemInFolder(f); return f;
+    const r = await dialog.showSaveDialog(win, { defaultPath: `${(c.title || 'majlis').replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 50) || 'majlis'}.md`, filters: [{ name: 'Markdown', extensions: ['md'] }] });
+    if (r.canceled || !r.filePath) return null;
+    fs.writeFileSync(r.filePath, md, 'utf8'); return r.filePath;
   });
   h('stats:scoreboard', () => store.scoreboard());
+  const convDir = (id) => orch.cwdFor(id);
+  h('file:read', (conversationId, rel) => { try { const r = readFileSafe(convDir(conversationId), rel); return { ...r, abs: undefined }; } catch (e) { return { error: String(e.message || e) }; } });
+  h('file:save-as', async (conversationId, rel) => {
+    const r0 = readFileSafe(convDir(conversationId), rel, 1);
+    const r = await dialog.showSaveDialog(win, { defaultPath: path.basename(r0.abs) });
+    if (r.canceled || !r.filePath) return null;
+    fs.copyFileSync(r0.abs, r.filePath); return r.filePath;
+  });
   h('ws:close', () => { wsWatcher.stop(); return true; });
-  h('ws:init-memory', (conversationId) => { const f = initProjectMemory(orch.cwdFor(conversationId)); shell.openPath(f); return f; });
+  h('ws:init-memory', (conversationId) => { initProjectMemory(orch.cwdFor(conversationId)); return true; });
   h('ws:open-external', (p) => { if (p && fs.existsSync(p)) shell.openPath(p); return true; });
   h('dialog:pick-folder', async () => {
     const r = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] });

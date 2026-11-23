@@ -22,7 +22,7 @@ const DEFAULT_ROUTES = {
 const COUNCIL_MEMBERS = [{ provider: 'claude', model: 'opus' }, { provider: 'codex', model: '' }, { provider: 'gemini', model: '@best' }];
 
 const DEFAULT_SETTINGS = {
-  schema: 6,
+  schema: 7,
   language: null, // null = follow system
   onboarded: false,
   smartRouting: true,
@@ -42,6 +42,7 @@ const DEFAULT_SETTINGS = {
   automations: [],
   learn: true,       // learn the user's preferences from conversations (shared by all models)
   learned: [],       // [{ id, text, ts }] what Majlis learned (user can delete any item)   // scheduled tasks (see scheduler.js)
+  sandbox: true,     // keep the models inside a private app folder: nothing is written to or opened on the user's PC; results are shown in the chat
   snapshots: true,   // record file changes in project folders so they can be undone
   historyTurns: 10,
   cooldownMinutes: 60,
@@ -54,7 +55,7 @@ const DEFAULT_SETTINGS = {
   customModels: { claude: [], codex: [], gemini: [] },
   routes: DEFAULT_ROUTES,
   voice: {
-    engine: 'whisper',         // speech-to-text runs on this PC (Whisper large-v3 turbo); no account needed
+    engine: 'auto',            // 'auto' = Gemini (accurate Arabic, from your subscription) with on-device Whisper as the backup; 'whisper' = on this PC only
     model: 'onnx-community/whisper-large-v3-turbo',
     language: 'auto',          // 'auto' | 'ar' | 'en'
     preload: true,             // download/load the speech model in the background at startup

@@ -90,6 +90,16 @@ const Voice = (() => {
     return (await off.startRendering()).getChannelData(0);
   }
 
+  /** 16 kHz mono Float32 -> 16-bit WAV bytes (for engines that take an audio file). */
+  function pcmToWav(pcm) {
+    const n = pcm.length, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+    const w = (o, str) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
+    w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVEfmt '); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, 16000, true); v.setUint32(28, 32000, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
+    for (let i = 0; i < n; i++) { const x = Math.max(-1, Math.min(1, pcm[i])); v.setInt16(44 + i * 2, x < 0 ? x * 0x8000 : x * 0x7fff, true); }
+    return new Uint8Array(buf);
+  }
+
   // ------------------------------------------------------------------ speaking
   const isArabic = (t) => /[؀-ۿ]/.test(t);
 
@@ -168,7 +178,7 @@ const Voice = (() => {
   function stopSpeaking() { if (speaking) { const s = speaking; speaking = null; s.cancel(); } else speechSynthesis.cancel(); }
   function isSpeaking() { return !!speaking; }
 
-  return { Recorder, toPcm16k, speak, stopSpeaking, isSpeaking, voicesReady, voices, speakable, pickVoice };
+  return { Recorder, toPcm16k, pcmToWav, speak, stopSpeaking, isSpeaking, voicesReady, voices, speakable, pickVoice };
 })();
 
 window.Voice = Voice;

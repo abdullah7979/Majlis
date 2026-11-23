@@ -230,10 +230,50 @@ function trailEl(m) {
   return box;
 }
 const fileUrl = (p) => 'file:///' + String(p).replace(/\\/g, '/').replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/').replace(/^([A-Za-z])%3A/, '$1:');
+function lightbox(src) {
+  const o = h('div', { class: 'palette-bg', onclick: () => o.remove() }, h('img', { src, class: 'lb-img' }));
+  document.body.append(o);
+}
 function imagesEl(images) {
   return h('div', { class: 'gallery' }, images.map((p) => h('figure', {},
-    h('img', { src: fileUrl(p), alt: '', onclick: () => api.shell.openPath(p), title: t('open_image') }),
-    h('figcaption', {}, h('button', { onclick: () => api.shell.openPath(p) }, t('open_image')), h('span', {}, baseName(p))))));
+    h('img', { src: fileUrl(p), alt: '', onclick: () => lightbox(fileUrl(p)), title: t('open_image') }),
+    h('figcaption', {}, h('button', { onclick: () => lightbox(fileUrl(p)) }, t('open_image')), h('button', { onclick: () => api.file.saveAs(S.conv.id, relFromConv(p)) }, t('save_as')), h('span', {}, baseName(p))))));
+}
+/** Path of a file inside this chat's private folder (the app only ever serves/reads files from there). */
+function relFromConv(abs) { const a = String(abs).replace(/\\/g, '/'); const i = a.lastIndexOf('/attachments/'); const m = /\/attachments\/[a-f0-9]+\/(.+)$/.exec(a); return m ? m[1] : a.split('/').pop(); }
+/** Everything the model made in this answer, shown right here in the chat: the page itself, the code, the text. */
+function filesEl(m) {
+  const box = h('div', { class: 'made' });
+  const entry = m.entry && m.files.find((f) => f.rel === m.entry);
+  const view = (f, open) => {
+    const d = h('details', { class: 'mfile' }, h('summary', {}, h('span', { class: 'mk' }, f.kind === 'html' ? '🌐' : f.kind === 'text' ? '📄' : '📦'), h('code', { dir: 'ltr' }, f.rel), h('i', {}, fmtTok(f.size) + 'B')));
+    const body = h('div', { class: 'mbody' });
+    let loaded = false;
+    d.addEventListener('toggle', async () => {
+      if (!d.open || loaded) return; loaded = true;
+      if (f.kind === 'binary' || f.kind === 'image') { body.append(h('p', { class: 'help' }, t('no_inline'))); return; }
+      const r = await api.file.read(S.conv.id, f.rel);
+      if (r.error) { body.textContent = '✖ ' + r.error; return; }
+      body.append(h('pre', { class: 'code', dir: 'ltr' }, r.text), r.truncated ? h('p', { class: 'help' }, t('truncated')) : null);
+    });
+    d.append(body, h('div', { class: 'mact' }, h('button', { class: 'btn', onclick: () => api.file.saveAs(S.conv.id, f.rel) }, t('save_as')),
+      f.kind === 'text' || f.kind === 'html' ? h('button', { class: 'btn', onclick: async () => { const r = await api.file.read(S.conv.id, f.rel); if (r.text != null) { navigator.clipboard.writeText(r.text); toast(t('copied')); } } }, t('copy')) : null));
+    if (open) d.open = true;
+    return d;
+  };
+  if (entry) {
+    const frame = h('iframe', { class: 'live-frame', sandbox: 'allow-scripts allow-forms allow-popups allow-same-origin', src: fileUrl(entry.abs) });
+    const card = h('div', { class: 'live' },
+      h('div', { class: 'lhead' }, h('b', {}, '🌐 ' + t('live_result')), h('span', { class: 'grow' }),
+        h('button', { class: 'btn', onclick: () => { card.classList.toggle('big'); } }, t('enlarge')),
+        h('button', { class: 'btn', onclick: () => { frame.src = fileUrl(entry.abs) + '?t=' + Date.now(); } }, '⟳'),
+        h('button', { class: 'btn', onclick: () => api.ws.exportZip(S.conv.id) }, '📦 ZIP')),
+      frame);
+    box.append(card);
+  }
+  const others = m.files.filter((f) => f.kind !== 'image');
+  if (others.length) box.append(h('details', { class: 'mlist', open: others.length <= 4 }, h('summary', {}, `📁 ${t('made_files')} (${others.length})`), others.map((f) => view(f, false))));
+  return box;
 }
 function changesEl(m) {
   const c = m.changes;
@@ -298,6 +338,7 @@ function updateAiEl(el, m) {
     el.append(body);
   }
   if (m.project && m.project.steps && m.project.steps.length) el.append(projectEl(m));
+  if (m.files && m.files.length && m.status === 'done') el.append(filesEl(m));
   if (m.images && m.images.length) el.append(imagesEl(m.images));
   if (m.changes && m.changes.files && m.changes.files.length) el.append(changesEl(m));
   if (m.council && m.council.length) el.append(councilEl(m));
@@ -368,7 +409,7 @@ function onChatEvent(e) {
     case 'retry': if (e.reason === 'bad_model') m.notice = t('retry_model'); break;
     case 'skip': (m.trail = m.trail || []).push({ provider: e.provider, model: e.model, outcome: e.why, until: e.until }); break;
     case 'fallback': (m.trail = m.trail || []).push({ provider: e.provider, model: m.liveModel, outcome: e.kind, until: e.until, message: e.message }); m.text = ''; break;
-    case 'done': Object.assign(m, { status: 'done', text: e.text, provider: e.provider, model: e.model, providerLabel: e.label, images: e.images || m.images, changes: e.changes || m.changes, council: e.council || m.council, tokens: e.tokens || m.tokens, project: e.project || m.project }); break;
+    case 'done': Object.assign(m, { status: 'done', text: e.text, provider: e.provider, model: e.model, providerLabel: e.label, images: e.images || m.images, files: e.files || m.files, entry: e.entry || m.entry, changes: e.changes || m.changes, council: e.council || m.council, tokens: e.tokens || m.tokens, project: e.project || m.project }); break;
     case 'project-plan': m.project = { title: e.title, steps: e.steps, phase: 'build', etaMin: e.etaMin, parallel: e.parallel }; m.statusText = null; if (!PV.open) togglePreview(true); break;
     case 'project-step': if (m.project && m.project.steps[e.index]) Object.assign(m.project.steps[e.index], { status: e.status, summary: e.summary || m.project.steps[e.index].summary, provider: e.provider }); break;
     case 'project-phase': m.project = m.project || { steps: [] }; m.project.phase = e.phase; m.statusText = null; break;
@@ -463,7 +504,15 @@ function pvRender(forceReload) {
   const url = pvUrl();
   if (!url) { $('#pvFrame').removeAttribute('src'); $('#pvFrame').removeAttribute('data-url'); }
   if (url && (forceReload || $('#pvFrame').getAttribute('data-url') !== url)) { $('#pvFrame').setAttribute('data-url', url); $('#pvFrame').src = url + '?t=' + Date.now(); }
-  $('#pvFiles').replaceChildren(...PV.files.map((f) => h('div', { class: 'f', onclick: () => api.ws.openPath(PV.dir + '/' + f.path) }, h('span', {}, f.path), h('i', {}, fmtTok(f.size) + 'B'))));
+  $('#pvFiles').replaceChildren(...PV.files.map((f) => h('div', { class: 'f', onclick: () => pvShowFile(f.path) }, h('span', {}, f.path), h('i', {}, fmtTok(f.size) + 'B'))));
+}
+async function pvShowFile(rel) {
+  if (!S.conv) return;
+  const r = await api.file.read(S.conv.id, rel);
+  const o = h('div', { class: 'palette-bg', onclick: (e) => { if (e.target === o) o.remove(); } },
+    h('div', { class: 'palette', style: 'width:min(820px,92vw)' }, h('div', { class: 'pitem', style: 'display:flex;justify-content:space-between' }, h('code', { dir: 'ltr' }, rel), h('button', { class: 'btn', onclick: () => api.file.saveAs(S.conv.id, rel) }, t('save_as'))),
+      h('pre', { class: 'code', dir: 'ltr', style: 'max-height:62vh;overflow:auto;margin:0;padding:12px' }, r.error ? r.error : r.binary ? t('no_inline') : r.text)));
+  document.body.append(o);
 }
 async function togglePreview(force) {
   const want = force === undefined ? !PV.open : force;
@@ -477,15 +526,16 @@ async function togglePreview(force) {
 function initPreview() {
   $('#pvClose').onclick = () => togglePreview(false);
   $('#pvReload').onclick = () => pvRender(true);
-  $('#pvExternal').onclick = () => PV.entry && api.ws.openPath(PV.dir + '/' + PV.entry);
-  $('#pvFolder').onclick = () => PV.dir && api.ws.openPath(PV.dir);
+  $('#pvExternal').classList.add('hidden'); $('#pvFolder').classList.add('hidden');
   $('#pvRun').onclick = () => {
+    if (sandboxOn()) { toast(t('run_needs_open')); return; }
     if (!S.allowRun && !confirm(t('run_confirm'))) return;
     S.allowRun = !S.allowRun; $('#pvRun').classList.toggle('on', S.allowRun); toast(t(S.allowRun ? 'run_on' : 'run_off'));
   };
   $('#pvZip').onclick = async () => { if (!S.conv) return; try { await api.ws.exportZip(S.conv.id); toast(t('zip_done')); } catch (e) { toast('✖ ' + e.message); } };
   $('#pvPublish').onclick = () => S.conv && api.ws.publish(S.conv.id);
-  $('#pvRules').onclick = () => S.conv && api.ws.initMemory(S.conv.id);
+  $('#pvRules').classList.toggle('hidden', sandboxOn());
+  $('#pvRules').onclick = () => S.conv && api.ws.initMemory(S.conv.id).then(() => toast('MAJLIS.md'));
   $('#pvTabView').onclick = () => { PV.tab = 'view'; pvRender(); };
   $('#pvTabFiles').onclick = () => { PV.tab = 'files'; pvRender(); };
   api.ws.onChanged((u) => {
@@ -500,6 +550,23 @@ function initPreview() {
 const V = { state: 'idle', mode: false, rec: null, awaiting: null, empties: 0 };
 function voiceSettings() { return (S.settings && S.settings.voice) || {}; }
 /** Fast-model repair of recognition mistakes. Never blocks voice: any failure keeps the original text. */
+const CLOUD = { fails: 0 };
+/** Best available speech-to-text: Gemini first (accurate Arabic) unless disabled/failing, else the on-device model. */
+async function transcribePcm(pcm, { forceLocal = false } = {}) {
+  const engine = voiceSettings().engine || 'auto';
+  const gem = S.providers.gemini;
+  if (!forceLocal && engine !== 'whisper' && gem && gem.installed && gem.enabled && gem.signedIn && !gem.cooldownUntil && CLOUD.fails < 2) {
+    const t0 = performance.now();
+    try {
+      const r = await api.voice.cloud(Voice.pcmToWav(pcm), asrLanguage());
+      if (r && r.ok && r.text) { CLOUD.fails = 0; return { text: r.text, ms: Math.round(performance.now() - t0), device: 'cloud', engine: 'gemini' }; }
+      if (r && r.reason === 'no_audio_support') CLOUD.fails = 2;
+      else CLOUD.fails++;
+    } catch (_) { CLOUD.fails++; }
+  }
+  const r = await window.ASR.transcribe(pcm, { language: asrLanguage(), model: voiceSettings().model });
+  return { ...r, engine: 'whisper' };
+}
 async function repairTranscript(text) {
   if (voiceSettings().smartFix === false) return text;
   try {
@@ -562,7 +629,7 @@ async function listen() {
   try {
     if (window.ASR.status().status !== 'ready') setVoiceUI('transcribing', t('voice_loading_model'));
     else setVoiceUI('transcribing');
-    r = await window.ASR.transcribe(res.pcm, { language: asrLanguage(), model: voiceSettings().model });
+    r = await transcribePcm(res.pcm);
   } catch (e) {
     V.mode = false; setVoiceUI('idle'); toast(`${t('voice_failed')} ${e && e.message ? '(' + e.message + ')' : ''}`); return;
   }
@@ -610,10 +677,13 @@ function onVoiceBarButton() {
 }
 function updateWorkspaceChip() {
   const ws = S.conv ? S.conv.workspace : S.draftWorkspace;
+  if (sandboxOn()) { $('#wsLabel').textContent = t('sandbox_label'); $('#wsChip').title = t('sandbox_title'); return; }
   $('#wsLabel').textContent = ws ? baseName(ws) : t('no_workspace');
   $('#wsChip').title = ws || t('choose_folder');
 }
+const sandboxOn = () => !(S.settings && S.settings.sandbox === false);
 async function pickWorkspace() {
+  if (sandboxOn()) { toast(t('sandbox_title')); return; }
   const dir = await api.dialog.pickFolder();
   if (!dir) return;
   if (S.conv) S.conv = await api.conv.update(S.conv.id, { workspace: dir });
@@ -843,6 +913,7 @@ function paneGeneral(pane) {
     field(t('cooldown'), num('cooldownMinutes', 5, 1440)),
     field(t('timeout'), num('timeoutMinutes', 1, 240)),
     field(t('continuity'), toggle(s.continuity !== false, (v) => saveSettings({ continuity: v })), t('continuity_help')),
+    field(t('sandbox'), toggle(sandboxOn(), async (v) => { if (!v && !confirm(t('sandbox_off_confirm'))) { return; } await saveSettings({ sandbox: v }); updateWorkspaceChip(); }), t('sandbox_help')),
     field(t('balance'), toggle(s.balance !== false, (v) => saveSettings({ balance: v })), t('balance_help')),
     field(t('snapshots'), toggle(s.snapshots !== false, (v) => saveSettings({ snapshots: v })), t('snapshots_help')),
     field(t('close_to_tray'), toggle(s.closeToTray, (v) => saveSettings({ closeToTray: v }))),
@@ -863,9 +934,44 @@ function paneGeneral(pane) {
         const r = await Voice.speak(t('voice_test_text'), { voiceName: voiceSel.value });
         if (r.reason === 'no_arabic_voice') toast(t('no_arabic_voice'));
       } }, t('test_voice')))),
-    micTestField()));
+    micTestField(), benchField()));
 }
 /** Record one sentence and show what was understood — a one-click end-to-end voice check. */
+// ---- accuracy benchmark: known Arabic sentences -> word error rate per engine
+const normAr = (x) => String(x || '').replace(/[\u064B-\u0652\u0640]/g, '').replace(/[أإآ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه').replace(/[^\u0600-\u06FFa-zA-Z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+function wer(ref, hyp) {
+  const a = normAr(ref).split(' ').filter(Boolean), b = normAr(hyp).split(' ').filter(Boolean);
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return a.length ? d[a.length][b.length] / a.length : 0;
+}
+async function runBenchmark(out) {
+  const meta = await (await fetch('assets/bench/bench.json')).json();
+  const engines = [{ id: 'whisper', label: t('bench_whisper'), run: (pcm) => window.ASR.transcribe(pcm, { language: 'ar', model: voiceSettings().model }) }];
+  if (await window.ASR.hasGpu()) engines.push({ id: 'accurate', label: t('bench_accurate'), run: (pcm) => window.ASR.transcribe(pcm, { language: 'ar', model: 'onnx-community/whisper-large-v3-ONNX' }) });
+  const gem = S.providers.gemini;
+  if (gem && gem.installed && gem.signedIn) engines.push({ id: 'gemini', label: 'Gemini', run: async (pcm) => { const t0 = performance.now(); const r = await api.voice.cloud(Voice.pcmToWav(pcm), 'ar'); return { text: r && r.ok ? r.text : '', ms: Math.round(performance.now() - t0), error: r && !r.ok ? r.reason : null }; } });
+  const clips = [];
+  for (const m of meta) clips.push({ ...m, pcm: await Voice.toPcm16k(await (await fetch('assets/bench/' + m.file)).blob()) });
+  const rows = [];
+  for (const e of engines) {
+    out.textContent = `${t('bench_running')} ${e.label}…`;
+    let sum = 0, ms = 0; const heard = [];
+    for (const c of clips) {
+      try { const r = await e.run(c.pcm); const w = wer(c.text, r.text || ''); sum += w; ms += r.ms || 0; heard.push(`${r.text || '—'}${r.error ? ' (' + r.error + ')' : ''}`); }
+      catch (err) { sum += 1; heard.push('✖ ' + (err.message || err)); }
+    }
+    rows.push({ label: e.label, acc: Math.max(0, Math.round((1 - sum / clips.length) * 100)), sec: (ms / clips.length / 1000).toFixed(1), heard });
+  }
+  out.replaceChildren(h('b', {}, t('bench_result')), h('table', { class: 'apilog' }, rows.map((r) => h('tr', {}, h('td', {}, r.label), h('td', { class: r.acc >= 80 ? 'ok' : 'bad' }, `${r.acc}%`), h('td', {}, `${r.sec}s`)))),
+    h('details', {}, h('summary', {}, t('bench_details')), rows.map((r) => h('div', { class: 'help', dir: 'auto' }, `${r.label}: ${r.heard.join(' | ')}`)), h('div', { class: 'help', dir: 'auto' }, `${t('bench_expected')}: ${meta.map((m) => m.text).join(' | ')}`)));
+}
+function benchField() {
+  const out = h('div', { class: 'out', dir: 'auto' }, t('bench_hint'));
+  const btn = h('button', { class: 'btn', onclick: async () => { btn.disabled = true; try { await runBenchmark(out); } catch (e) { out.textContent = '✖ ' + (e.message || e); } finally { btn.disabled = false; } } }, `📊 ${t('bench_btn')}`);
+  return field(t('bench_title'), h('div', {}, btn, out));
+}
 function micTestField() {
   const out = h('div', { class: 'out', dir: 'auto' }, t('mic_test_hint'));
   const btn = h('button', { class: 'btn primary', onclick: async () => {
@@ -875,13 +981,14 @@ function micTestField() {
       const res = await rec.record();
       if (!res.pcm) { out.textContent = '—'; return; }
       out.textContent = t('mic_test_working');
-      const r = await window.ASR.transcribe(res.pcm, { language: asrLanguage(), model: voiceSettings().model });
+      const r = await transcribePcm(res.pcm);
       const raw = r.text;
-      out.textContent = `${raw || '—'}   (${(r.ms / 1000).toFixed(1)}s · ${r.device === 'webgpu' ? t('asr_gpu') : t('asr_cpu')})`;
+      const devTxt = r.device === 'cloud' ? 'Gemini' : r.device === 'webgpu' ? t('asr_gpu') : t('asr_cpu');
+      out.textContent = `${raw || '—'}   (${(r.ms / 1000).toFixed(1)}s · ${devTxt})`;
       if (raw && voiceSettings().smartFix !== false) {
         out.textContent += `\n${t('voice_fixing')}`;
         const f = await api.voice.fix(raw, null);
-        out.textContent = `${t('heard_raw')}: ${raw}\n${t('after_fix')}: ${f && f.text ? f.text : raw}   (${(r.ms / 1000).toFixed(1)}s · ${r.device === 'webgpu' ? t('asr_gpu') : t('asr_cpu')})`;
+        out.textContent = `${t('heard_raw')}: ${raw}\n${t('after_fix')}: ${f && f.text ? f.text : raw}   (${(r.ms / 1000).toFixed(1)}s · ${devTxt})`;
       }
     } catch (e) { out.textContent = e && e.name === 'NotAllowedError' ? t('mic_denied') : `✖ ${(e && e.message) || e}`; }
     finally { btn.disabled = false; }

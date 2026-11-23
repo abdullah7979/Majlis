@@ -98,6 +98,33 @@ function exportZip(dir, outDir, title) {
   return out;
 }
 
+/** Everything a model produced during one answer (non-image files; images have their own gallery). */
+const IMG_RE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
+function collectFiles(dir, since, { max = 40 } = {}) {
+  const out = [];
+  for (const f of listFiles(dir, { max: 600, depth: 4 })) {
+    if (f.mtime < since - 1000 || f.path === MEMORY_FILE) continue;
+    if (/^attachments?\//i.test(f.path)) continue;
+    out.push({ rel: f.path, abs: path.join(dir, f.path), size: f.size, kind: /\.html?$/i.test(f.path) ? 'html' : IMG_RE.test(f.path) ? 'image' : isTextName(f.path) ? 'text' : 'binary' });
+    if (out.length >= max) break;
+  }
+  return { files: out, entry: findEntry(out.map((x) => ({ path: x.rel, mtime: 0 }))) };
+}
+const TEXT_RE = /\.(txt|md|markdown|json|js|mjs|cjs|ts|tsx|jsx|css|scss|html?|xml|svg|csv|tsv|py|java|c|h|cpp|cs|go|rs|rb|php|sh|bat|ps1|sql|yml|yaml|toml|ini|env|log|vue|svelte|kt|swift|r|lua)$/i;
+function isTextName(n) { return TEXT_RE.test(n) || /(^|\/)(readme|license|dockerfile|makefile)$/i.test(n); }
+
+/** Read a file inside the project folder only (no path tricks). Text up to `max` bytes. */
+function readFileSafe(dir, rel, max = 400000) {
+  const root = path.resolve(dir);
+  const full = path.resolve(root, String(rel || ''));
+  if (full !== root && !full.startsWith(root + path.sep)) throw new Error('outside the project folder');
+  const st = fs.statSync(full);
+  if (!st.isFile()) throw new Error('not a file');
+  if (!isTextName(full)) return { binary: true, size: st.size, abs: full };
+  const buf = fs.readFileSync(full);
+  return { text: buf.slice(0, max).toString('utf8'), truncated: buf.length > max, size: st.size, abs: full };
+}
+
 const MEMORY_FILE = 'MAJLIS.md';
 function readProjectMemory(dir) {
   if (!dir) return '';
@@ -124,4 +151,4 @@ function initProjectMemory(dir) {
   return f;
 }
 
-module.exports = { exportZip, verifyStatic, listFiles, findEntry, snapshot, Watcher, readProjectMemory, initProjectMemory, MEMORY_FILE };
+module.exports = { collectFiles, readFileSafe, isTextName, exportZip, verifyStatic, listFiles, findEntry, snapshot, Watcher, readProjectMemory, initProjectMemory, MEMORY_FILE };
