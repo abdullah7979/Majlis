@@ -1,5 +1,5 @@
 'use strict';
-const { Watcher, initProjectMemory } = require('../core/workspace');
+const { Watcher, initProjectMemory, exportZip } = require('../core/workspace');
 const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, globalShortcut, nativeImage, Notification, session, net } = require('electron');
 const { installAgy } = require('../core/installers');
 const path = require('path');
@@ -129,7 +129,7 @@ function registerIpc() {
     return store.saveConversation(c);
   });
 
-  const startChat = (mode) => async ({ conversationId, text, files = [], force, smart, voice }) => {
+  const startChat = (mode) => async ({ conversationId, text, files = [], force, smart, voice, allowRun }) => {
     const attachments = files.length ? store.importAttachments(conversationId, files.filter((f) => fs.existsSync(f))) : [];
     const emit = (e) => {
       if (win && !win.isDestroyed()) win.webContents.send('chat:event', e);
@@ -139,7 +139,7 @@ function registerIpc() {
     };
     const job = mode === 'council' ? orch.council({ conversationId, text, attachments, voice }, emit)
       : mode === 'compare' ? orch.council({ conversationId, text, attachments, voice, compare: true }, emit)
-      : mode === 'project' ? orch.project({ conversationId, text, attachments, voice }, emit)
+      : mode === 'project' ? orch.project({ conversationId, text, attachments, voice, allowRun: !!allowRun }, emit)
       : orch.send({ conversationId, text, attachments, force, smart, voice }, emit);
     job.catch((err) => win && win.webContents.send('chat:event', { conversationId, type: 'failed', error: String(err.message || err) }));
     return true;
@@ -228,6 +228,15 @@ function registerIpc() {
     const { readProjectMemory } = require('../core/workspace');
     return { dir, files: snap.files, entry: snap.entry, hasRules: !!readProjectMemory(dir) };
   });
+  h('ws:export-zip', (conversationId) => { const z = exportZip(orch.cwdFor(conversationId), app.getPath('downloads')); shell.showItemInFolder(z); return z; });
+  h('ws:publish', (conversationId) => { const dir = orch.cwdFor(conversationId); shell.openExternal('https://app.netlify.com/drop'); shell.openPath(dir); return true; });
+  h('conv:export-md', async (conversationId) => {
+    const c = store.getConversation(conversationId); if (!c) return null;
+    const md = [`# ${c.title || 'Majlis'}`, '', ...c.messages.map((m) => `## ${m.role === 'user' ? '🧑' : `🤖 ${m.providerLabel || 'Majlis'}${m.model ? ' · ' + m.model : ''}`}\n\n${m.text || ''}\n`)].join('\n');
+    const f = path.join(app.getPath('downloads'), `${(c.title || 'majlis').replace(/[\\/:*?"<>|]+/g, ' ').trim().slice(0, 50) || 'majlis'}.md`);
+    fs.writeFileSync(f, md, 'utf8'); shell.showItemInFolder(f); return f;
+  });
+  h('stats:scoreboard', () => store.scoreboard());
   h('ws:close', () => { wsWatcher.stop(); return true; });
   h('ws:init-memory', (conversationId) => { const f = initProjectMemory(orch.cwdFor(conversationId)); shell.openPath(f); return f; });
   h('ws:open-external', (p) => { if (p && fs.existsSync(p)) shell.openPath(p); return true; });

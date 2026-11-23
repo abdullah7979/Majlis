@@ -257,6 +257,7 @@ function projectEl(m) {
   const cur = m.status === 'done' ? 99 : Math.max(0, order.indexOf(P.phase === 'fix' ? 'review' : P.phase));
   return h('div', { class: 'project-card' },
     h('div', { class: 'ph' }, order.map((k, i) => h('span', { class: i < cur ? 'done' : i === cur ? 'on' : '' }, (i < cur ? '✓ ' : '') + t('ph_' + k)))),
+    (P.etaMin || P.parallel) && m.status !== 'done' ? h('div', { class: 'help', style: 'margin:0 0 6px' }, [P.etaMin ? `⏱ ${t('eta')}: ~${P.etaMin} ${t('min')}` : '', P.parallel ? `⚡ ${P.parallel} ${t('parallel_n')}` : ''].filter(Boolean).join(' · ')) : null,
     h('ol', {}, P.steps.map((x) => h('li', { class: x.status }, `${x.status === 'done' ? '✓' : x.status === 'running' ? '⏳' : x.status === 'failed' ? '✖' : '○'} ${x.title}`, x.summary ? h('small', {}, x.summary) : null))));
 }
 function councilEl(m) {
@@ -368,7 +369,7 @@ function onChatEvent(e) {
     case 'skip': (m.trail = m.trail || []).push({ provider: e.provider, model: e.model, outcome: e.why, until: e.until }); break;
     case 'fallback': (m.trail = m.trail || []).push({ provider: e.provider, model: m.liveModel, outcome: e.kind, until: e.until, message: e.message }); m.text = ''; break;
     case 'done': Object.assign(m, { status: 'done', text: e.text, provider: e.provider, model: e.model, providerLabel: e.label, images: e.images || m.images, changes: e.changes || m.changes, council: e.council || m.council, tokens: e.tokens || m.tokens, project: e.project || m.project }); break;
-    case 'project-plan': m.project = { title: e.title, steps: e.steps, phase: 'build' }; m.statusText = null; if (!PV.open) togglePreview(true); break;
+    case 'project-plan': m.project = { title: e.title, steps: e.steps, phase: 'build', etaMin: e.etaMin, parallel: e.parallel }; m.statusText = null; if (!PV.open) togglePreview(true); break;
     case 'project-step': if (m.project && m.project.steps[e.index]) Object.assign(m.project.steps[e.index], { status: e.status, summary: e.summary || m.project.steps[e.index].summary, provider: e.provider }); break;
     case 'project-phase': m.project = m.project || { steps: [] }; m.project.phase = e.phase; m.statusText = null; break;
     case 'council-start': (m.council = m.council || []).push({ provider: e.provider, label: e.label, model: e.model, kind: 'running', ok: false }); m.statusText = t('council_thinking'); break;
@@ -410,10 +411,44 @@ async function sendCurrent({ voice = false } = {}) {
   const force = $('#modelPick').value === 'auto' ? null : $('#modelPick').value;
   S.running.add(conv.id); updateSendButton();
   if (voice) V.awaiting = conv.id;
-  if (S.projectOn && !force) await api.chat.project({ conversationId: conv.id, text, files, voice });
+  if (S.projectOn && !force) await api.chat.project({ conversationId: conv.id, text, files, voice, allowRun: !!S.allowRun });
   else if (S.compareOn && !force) await api.chat.compare({ conversationId: conv.id, text, files, voice });
   else if (S.councilOn && !force) await api.chat.council({ conversationId: conv.id, text, files, voice });
   else await api.chat.send({ conversationId: conv.id, text, files, force, voice });
+}
+
+// ------------------------------------------------------------------ command palette (Ctrl+K)
+function openPalette() {
+  const tpls = ['site', 'api', 'app', 'bot'];
+  const setMode = (key, btn) => { S[key] = !S[key]; $(btn).classList.toggle('on', S[key]); };
+  const items = [
+    [t('pal_new'), () => showWelcome()],
+    [t('pal_project'), () => $('#projectBtn').click()],
+    [t('pal_compare'), () => $('#compareBtn').click()],
+    [t('pal_council'), () => $('#councilBtn').click()],
+    [t('pal_preview'), () => togglePreview()],
+    [t('pal_export'), async () => { if (S.conv) { await api.conv2.exportMd(S.conv.id); toast(t('exported')); } }],
+    [t('pal_autos'), () => $('#openAutos').click()],
+    [t('pal_settings'), () => openSettings('providers')],
+    ...tpls.map((k) => [`🏗 ${t('pal_tpl')}: ${t('tpl_' + k)}`, () => { showWelcome(); if (!S.projectOn) $('#projectBtn').click(); $('#input').value = t(`tpl_${k}_p`); autoGrow(); $('#input').focus(); }]),
+  ];
+  const box = h('div', { class: 'palette' });
+  const input = h('input', { type: 'text', dir: 'auto', placeholder: t('palette_ph') });
+  const list = h('div', { class: 'plist' });
+  let sel = 0, shown = items;
+  const draw = () => { list.replaceChildren(...shown.map((it, i) => h('div', { class: 'pitem' + (i === sel ? ' on' : ''), onclick: () => run(it) }, it[0]))); };
+  const run = (it) => { close(); it[1](); };
+  const close = () => { overlay.remove(); $('#input').focus(); };
+  input.oninput = () => { const q = input.value.trim().toLowerCase(); shown = q ? items.filter((it) => it[0].toLowerCase().includes(q)) : items; sel = 0; draw(); };
+  input.onkeydown = (e) => {
+    if (e.key === 'Escape') close();
+    else if (e.key === 'ArrowDown') { sel = Math.min(shown.length - 1, sel + 1); draw(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { sel = Math.max(0, sel - 1); draw(); e.preventDefault(); }
+    else if (e.key === 'Enter' && shown[sel]) run(shown[sel]);
+  };
+  box.append(input, list);
+  const overlay = h('div', { class: 'palette-bg', onclick: (e) => { if (e.target === overlay) close(); } }, box);
+  document.body.append(overlay); draw(); input.focus();
 }
 
 // ------------------------------------------------------------------ live preview
@@ -443,6 +478,12 @@ function initPreview() {
   $('#pvReload').onclick = () => pvRender(true);
   $('#pvExternal').onclick = () => PV.entry && api.ws.openPath(PV.dir + '/' + PV.entry);
   $('#pvFolder').onclick = () => PV.dir && api.ws.openPath(PV.dir);
+  $('#pvRun').onclick = () => {
+    if (!S.allowRun && !confirm(t('run_confirm'))) return;
+    S.allowRun = !S.allowRun; $('#pvRun').classList.toggle('on', S.allowRun); toast(t(S.allowRun ? 'run_on' : 'run_off'));
+  };
+  $('#pvZip').onclick = async () => { if (!S.conv) return; try { await api.ws.exportZip(S.conv.id); toast(t('zip_done')); } catch (e) { toast('✖ ' + e.message); } };
+  $('#pvPublish').onclick = () => S.conv && api.ws.publish(S.conv.id);
   $('#pvRules').onclick = () => S.conv && api.ws.initMemory(S.conv.id);
   $('#pvTabView').onclick = () => { PV.tab = 'view'; pvRender(); };
   $('#pvTabFiles').onclick = () => { PV.tab = 'files'; pvRender(); };
@@ -705,7 +746,18 @@ function usageCard() {
         limitChips(p),
         h('span', { class: `ustate ${p.cooldownUntil ? 'warn' : !p.signedIn ? 'bad' : 'ok'}` }, state));
     }),
-    h('p', { class: 'help', style: 'margin:10px 0 0' }, t('tok_note')));
+    h('p', { class: 'help', style: 'margin:10px 0 0' }, t('tok_note')),
+    scoreEl());
+}
+function scoreEl() {
+  const box = h('div', { class: 'score' });
+  api.stats.scoreboard().then((sb) => {
+    const cats = Object.keys(sb).filter((c) => Object.values(sb[c]).some((v) => v));
+    box.append(h('b', {}, t('score_title')), h('p', { class: 'help', style: 'margin:2px 0 6px' }, t('score_help')));
+    if (!cats.length) { box.append(h('p', { class: 'help' }, t('score_none'))); return; }
+    box.append(h('table', { class: 'apilog' }, cats.map((c) => h('tr', {}, h('td', {}, t(`cat_${c}`)), PROVIDER_IDS.map((id) => h('td', { class: (sb[c][id] || 0) > 0 ? 'ok' : (sb[c][id] || 0) < 0 ? 'bad' : '' }, `${providerLabel(id)} ${(sb[c][id] || 0) > 0 ? '+' : ''}${sb[c][id] || 0}`))))));
+  }).catch(() => {});
+  return box;
 }
 function limitChips(p) {
   return h('span', {}, (p.limits || []).map((l) => {
@@ -1136,6 +1188,7 @@ async function boot() {
   $('#attachBtn').onclick = async () => { const f = await api.dialog.pickFiles(); S.pendingFiles.push(...f); renderAttachments(); };
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.code === 'KeyN') { e.preventDefault(); showWelcome(); }
+    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyK') { e.preventDefault(); if (!document.querySelector('.palette-bg')) openPalette(); }
     if ((e.ctrlKey || e.metaKey) && e.code === 'Comma') { e.preventDefault(); openSettings(); }
     if ((e.ctrlKey || e.metaKey) && e.code === 'KeyM') { e.preventDefault(); listen(); }
     if ((e.ctrlKey || e.metaKey) && e.code === 'KeyI') { e.preventDefault(); improveCurrent(); }

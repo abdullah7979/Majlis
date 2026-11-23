@@ -352,3 +352,11 @@ input[type=time], input[type=number], input[type=text], select { background: var
 .limit-chip.warn { background: #5a3a14; } .limit-chip.bad { background: #5a1f1f; }
 
 .apilog { width: 100%; font-size: 12px; border-collapse: collapse; margin: 8px 0; } .apilog td { padding: 3px 8px; border-bottom: 1px solid #22222c; } .apilog .ok { color: #7ee2a8; } .apilog .bad { color: #ff8a8a; }
+
+.palette-bg { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; justify-content: center; align-items: flex-start; padding-top: 14vh; z-index: 50; }
+.palette { width: min(560px, 90vw); background: #15151d; border: 1px solid #34344a; border-radius: 14px; overflow: hidden; box-shadow: 0 20px 60px rgba(0,0,0,.6); }
+.palette input { width: 100%; box-sizing: border-box; padding: 14px 16px; background: transparent; border: 0; border-bottom: 1px solid #2a2a38; color: inherit; font: inherit; font-size: 15px; outline: none; }
+.plist { max-height: 46vh; overflow: auto; }
+.pitem { padding: 10px 16px; cursor: pointer; } .pitem.on, .pitem:hover { background: #2a2350; }
+#pvRun.on { background: #5a3a14; border-radius: 8px; }
+.score { margin-top: 12px; padding-top: 10px; border-top: 1px solid #22222c; }

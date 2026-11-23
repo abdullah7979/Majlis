@@ -122,6 +122,11 @@ class Store {
     l[category][provider] = (l[category][provider] || 0) + (good ? 1 : -1);
     this.saveState();
   }
+  /** Rolling average of how long a project step takes (ms) — drives the time estimate. */
+  recordStep(ms) { const t = (this.state.stepStats = this.state.stepStats || { n: 0, avg: 0 }); t.avg = t.n ? Math.round((t.avg * Math.min(t.n, 20) + ms) / (Math.min(t.n, 20) + 1)) : ms; t.n++; this.saveState(); }
+  stepAvgMs() { const t = this.state.stepStats; return t && t.n ? t.avg : 0; }
+  /** What feedback has taught Majlis: per task type, how each model scores (👍 − 👎). */
+  scoreboard() { return JSON.parse(JSON.stringify(this.state.learning || {})); }
   learningScore(category, provider) { return (this.state.learning[category] || {})[provider] || 0; }
 
   // ---- conversations

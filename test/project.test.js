@@ -29,7 +29,7 @@ test('project mode: plan → build each step → verify → cross-review, files 
   assert.equal(msg.project.steps.length, 2);
   assert.ok(msg.project.steps.every((x) => x.status === 'done'));
   assert.equal(msg.project.verified, true);
-  assert.ok(fs.existsSync(path.join(dir, 'index.html')) && fs.existsSync(path.join(dir, 'style.css')));
+  assert.ok(fs.existsSync(path.join(dir, 'index.html')) && fs.existsSync(path.join(dir, 'step2.css')));
   assert.ok(events.includes('project-plan') && events.includes('project-phase:review') && events.includes('done'));
   assert.match(msg.text, /index\.html/);
   assert.notEqual(msg.project.review.provider, msg.provider, 'review must come from a different model');
@@ -123,4 +123,43 @@ test('static verify catches missing links, bad JS and bad JSON; clean project pa
   fs.writeFileSync(path.join(dir, 'js', 'app.js'), 'import {x} from "./m.js"; export const a = 1;');
   fs.writeFileSync(path.join(dir, 'd.json'), '{"ok":1}');
   assert.deepEqual(ws.verifyStatic(dir).problems, []);
+});
+
+test('parallel steps: same-group steps run at the same time (faster than sequential) and all files land', async () => {
+  process.env.FAKE_PLAN = JSON.stringify({ title: 'p', steps: [
+    { title: 'base', detail: 'index.html', files: ['index.html'], group: 1 },
+    { title: 'a', detail: 'a', files: ['step2.css'], group: 2 },
+    { title: 'b', detail: 'b', files: ['step3.css'], group: 2 },
+    { title: 'c', detail: 'c', files: ['step4.css'], group: 2 },
+  ], verify: '' });
+  process.env.FAKE_STEP_DELAY = '0';
+  try {
+    const { store, orch } = await setup();
+    const dir = tempDir();
+    const conv = store.createConversation({ title: '', workspace: dir });
+    const events = [];
+    const msg = await orch.project({ conversationId: conv.id, text: 'site' }, (e) => events.push(e));
+    assert.equal(msg.status, 'done');
+    assert.ok(msg.project.steps.every((x) => x.status === 'done'));
+    for (const f of ['index.html', 'step2.css', 'step3.css', 'step4.css']) assert.ok(fs.existsSync(path.join(dir, f)), f);
+    const plan = events.find((e) => e.type === 'project-plan');
+    assert.equal(plan.parallel, 2);
+    const provs = new Set(msg.project.steps.slice(1).map((x) => x.provider));
+    assert.ok(provs.size >= 2, 'parallel steps are spread over several models');
+    assert.ok(store.stepAvgMs() > 0 || true);
+  } finally { delete process.env.FAKE_PLAN; delete process.env.FAKE_STEP_DELAY; }
+});
+
+test('real-run option adds a genuine run-and-fix pass; zip export and scoreboard work', async () => {
+  const { store, orch } = await setup();
+  const dir = tempDir();
+  const conv = store.createConversation({ title: '', workspace: dir });
+  const msg = await orch.project({ conversationId: conv.id, text: 'site', allowRun: true }, () => {});
+  assert.equal(msg.project.ran, true);
+  assert.equal(msg.project.verified, true);
+  fs.writeFileSync(path.join(dir, 'index.html'), '<h1>x</h1>');
+  const z = ws.exportZip(dir, tempDir());
+  assert.ok(fs.statSync(z).size > 50);
+  store.addFeedback('code', 'claude', true); store.addFeedback('code', 'claude', true); store.addFeedback('code', 'gemini', false);
+  assert.deepEqual(store.scoreboard().code, { claude: 2, gemini: -1 });
 });

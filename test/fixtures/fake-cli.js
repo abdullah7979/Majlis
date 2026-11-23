@@ -164,13 +164,14 @@ function main() {
   } else if (/You maintain a short memory/.test(fullInput) && process.env[`FAKE_REPLY_${name}`]) {
     answer = process.env[`FAKE_REPLY_${name}`];
   } else if (/You are the lead engineer/.test(fullInput)) {
-    answer = '{"title":"موقع تجريبي","steps":[{"title":"الهيكل","detail":"index.html"},{"title":"التنسيق","detail":"style.css"}],"verify":"node -v"}';
+    answer = process.env.FAKE_PLAN || '{"title":"موقع تجريبي","steps":[{"title":"الهيكل","detail":"index.html"},{"title":"التنسيق","detail":"style.css"}],"verify":"node -v"}';
   } else if (/You are building a project step by step/.test(fullInput)) {
     const m = /Now do ONLY step (\d+)/.exec(fullInput);
     if (m && m[1] === '1') fs.writeFileSync(path.join(process.cwd(), 'index.html'), '<!doctype html><title>t</title><h1>hello</h1>');
-    else fs.writeFileSync(path.join(process.cwd(), 'style.css'), 'h1{color:#c60}');
+    else fs.writeFileSync(path.join(process.cwd(), `step${m ? m[1] : 'x'}.css`), 'h1{color:#c60}');
+    if (process.env.FAKE_STEP_DELAY) { const t = Date.now(); while (Date.now() - t < +process.env.FAKE_STEP_DELAY); }
     answer = `done step ${m ? m[1] : '?'}`;
-  } else if (/Prove that it really works/.test(fullInput)) {
+  } else if (/Prove that it really works|PROVE it works/.test(fullInput)) {
     answer = 'VERIFIED\nall good';
   } else if (/You are a strict senior reviewer/.test(fullInput)) {
     answer = process.env.FAKE_REVIEW || 'LGTM';

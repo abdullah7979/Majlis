@@ -85,6 +85,19 @@ function verifyStatic(dir) {
   return { checked: files.length, problems: problems.slice(0, 20) };
 }
 
+/** Packs the project folder into a .zip next to it (what you upload to any free host, or send to someone). */
+function exportZip(dir, outDir) {
+  const { spawnSync } = require('child_process');
+  const name = path.basename(dir).replace(/[^\w\u0600-\u06FF-]+/g, '_') || 'project';
+  const out = path.join(outDir || path.dirname(dir), `${name}-${new Date().toISOString().slice(0, 10)}.zip`);
+  try { fs.rmSync(out, { force: true }); } catch (_) {}
+  const r = process.platform === 'win32'
+    ? spawnSync('powershell', ['-NoProfile', '-Command', `Compress-Archive -Path '${dir.replace(/'/g, "''")}\\*' -DestinationPath '${out.replace(/'/g, "''")}' -Force`], { encoding: 'utf8', windowsHide: true })
+    : spawnSync('zip', ['-qr', out, '.'], { cwd: dir, encoding: 'utf8' });
+  if (r.status !== 0 || !fs.existsSync(out)) throw new Error((r.stderr || r.error && r.error.message || 'zip failed').toString().slice(0, 200));
+  return out;
+}
+
 const MEMORY_FILE = 'MAJLIS.md';
 function readProjectMemory(dir) {
   if (!dir) return '';
@@ -111,4 +124,4 @@ function initProjectMemory(dir) {
   return f;
 }
 
-module.exports = { verifyStatic, listFiles, findEntry, snapshot, Watcher, readProjectMemory, initProjectMemory, MEMORY_FILE };
+module.exports = { exportZip, verifyStatic, listFiles, findEntry, snapshot, Watcher, readProjectMemory, initProjectMemory, MEMORY_FILE };

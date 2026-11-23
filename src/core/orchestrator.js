@@ -651,33 +651,55 @@ class Orchestrator {
       phase('plan', 'running');
       const pr = await this.runWithFallback(builders, [
         'You are the lead engineer. Plan how to build what the user asked for, in the current folder (it may already contain files: read them first and build on them).',
-        'Return ONLY JSON, no prose: {"title":"short project name","steps":[{"title":"short step name","detail":"concrete work and files for this step"}],"verify":"the shell command(s) that prove it works (tests/build), or empty"}',
+        'Return ONLY JSON, no prose: {"title":"short project name","steps":[{"title":"short step name","detail":"concrete work for this step","files":["files this step creates or edits"],"group":1}],"verify":"the shell command(s) that prove it works (tests/build), or empty"}',
         'Use 3 to 8 steps ordered so the project is runnable after every step. Prefer simple, dependency-light technology unless the request says otherwise.',
+        '"group" is a number: steps with the SAME group number run at the same time by different engineers, so give them the same group ONLY when they touch completely different files and do not depend on each other (e.g. separate pages, separate modules). Foundation steps come first in their own group.',
+        'If the folder already contains a project, this is a change request: plan ONLY the changes (1 to 3 steps), reuse what exists, and never rebuild from scratch.',
         '', 'REQUEST:', goal].join('\n'), ro('safe'));
       if (!pr.ok) throw Object.assign(new Error('plan_failed'), { failure: pr.failure });
       let plan; try { plan = JSON.parse(/\{[\s\S]*\}/.exec(pr.text)[0]); } catch (_) { plan = null; }
-      const steps = plan && Array.isArray(plan.steps) && plan.steps.length ? plan.steps.slice(0, 8).map((x) => ({ title: String(x.title || '').slice(0, 80), detail: String(x.detail || x.title || '').slice(0, 600) })) : [{ title: arabic ? 'التنفيذ' : 'Build', detail: text }];
+      const steps = plan && Array.isArray(plan.steps) && plan.steps.length ? plan.steps.slice(0, 8).map((x, i) => ({ title: String(x.title || '').slice(0, 80), detail: String(x.detail || x.title || '').slice(0, 600), files: Array.isArray(x.files) ? x.files.slice(0, 12).map(String) : [], group: Number.isFinite(+x.group) ? +x.group : i + 1 })) : [{ title: arabic ? 'التنفيذ' : 'Build', detail: text, files: [], group: 1 }];
       aiMsg.project = { title: String((plan && plan.title) || text).slice(0, 80), steps: steps.map((x) => ({ title: x.title, status: 'pending', summary: '' })), phase: 'build', verify: '' };
-      send({ type: 'project-plan', title: aiMsg.project.title, steps: aiMsg.project.steps, provider: pr.provider });
+      const groups = [...new Set(steps.map((x) => x.group))].length;
+      const avg = this.store.stepAvgMs();
+      aiMsg.project.etaMin = avg ? Math.max(1, Math.round((groups * avg) / 60000)) : null;
+      send({ type: 'project-plan', title: aiMsg.project.title, steps: aiMsg.project.steps, provider: pr.provider, etaMin: aiMsg.project.etaMin, parallel: steps.length - groups });
 
       // 2 — build, step by step
       phase('build', 'running');
       let builder = pr.provider;
       const order = () => [{ provider: builder, model: builders.find((b) => b.provider === builder).model }, ...builders.filter((b) => b.provider !== builder)];
-      for (let i = 0; i < steps.length; i++) {
+      const runStep = async (i, preferred, parallelNote) => {
         aiMsg.project.steps[i].status = 'running'; send({ type: 'project-step', index: i, status: 'running' });
-        const r = await this.runWithFallback(order(), [
+        const t0 = Date.now();
+        const ord = [{ provider: preferred, model: builders.find((b) => b.provider === preferred).model }, ...builders.filter((b) => b.provider !== preferred)];
+        const r = await this.runWithFallback(ord, [
           'You are building a project step by step. Overall request:', '<<<', text, '>>>',
           'Plan:', ...steps.map((x, k) => `${k + 1}. ${x.title}`),
           `Now do ONLY step ${i + 1} of ${steps.length}: ${steps[i].title} — ${steps[i].detail}`,
+          steps[i].files.length ? `Files for this step: ${steps[i].files.join(', ')}` : '',
+          parallelNote || '',
           'Work directly in the current folder: create and edit real, complete files (no placeholders, no TODOs). Keep earlier steps\' work working. Do not ask questions.',
           'When finished, reply with ONE short line saying what you did, written in the same language as the request.',
           'You cannot run node, npx, python or a browser here (commands are not approved), so do not try; write the code carefully instead. Majlis checks syntax and links itself afterwards.',
-        ].join('\n'), ro(buildAuto));
+        ].filter(Boolean).join('\n'), ro(buildAuto));
         if (!r.ok) { aiMsg.project.steps[i].status = 'failed'; send({ type: 'project-step', index: i, status: 'failed', summary: r.failure && r.failure.message || '' }); throw Object.assign(new Error('step_failed'), { failure: r.failure }); }
-        builder = r.provider;
         aiMsg.project.steps[i] = { ...aiMsg.project.steps[i], status: 'done', summary: r.text.split('\n')[0].slice(0, 200), provider: r.provider };
         send({ type: 'project-step', index: i, status: 'done', summary: aiMsg.project.steps[i].summary, provider: r.provider });
+        this.store.recordStep(Date.now() - t0);
+        return r.provider;
+      };
+      // Steps sharing a group number run at the same time, spread over the available models.
+      const ready = () => builders.map((b) => b.provider).filter((id) => this.isReady(id));
+      const byGroup = [];
+      steps.forEach((x, i) => { const last = byGroup[byGroup.length - 1]; if (last && steps[last[0]].group === x.group) last.push(i); else byGroup.push([i]); });
+      for (const idxs of byGroup) {
+        if (idxs.length === 1) { builder = await runStep(idxs[0], builder); continue; }
+        const pool = ready(); const share = pool.length ? pool : [builder];
+        send({ type: 'activity', text: `${idxs.length} steps in parallel` });
+        const note = 'Other engineers are doing other steps AT THE SAME TIME in other files of this folder: edit ONLY the files of your step, and do not touch anything else.';
+        const done = await Promise.all(idxs.map((i, k) => runStep(i, share[k % share.length], note)));
+        builder = done[0];
       }
 
       // 3 — Majlis' own static check first (links, syntax, JSON), then a model pass that fixes what it found
@@ -695,6 +717,17 @@ class Orchestrator {
         send({ type: 'project-phase', phase: 'verify', status: stat.problems.length ? 'issues' : 'ok', round });
       }
       verified = stat.problems.length === 0;
+      if (opts.allowRun) {
+        // The user allowed commands in this project: really run its tests/build/start, and fix what fails.
+        send({ type: 'activity', text: 'Running the project for real' });
+        const v = await this.runWithFallback(order(), [
+          'The project in this folder must satisfy this request:', '<<<', text, '>>>',
+          'Now PROVE it works by really running it: install dependencies if needed, run the tests/build' + (plan && plan.verify ? ` (suggested: ${String(plan.verify).slice(0, 200)})` : '') + ', and start it briefly to see it boot. Stay inside this folder. If something fails, fix it and run again (at most 3 attempts).',
+          'The first line of your reply must be exactly VERIFIED if everything passes, otherwise ISSUES: followed by what is still broken.',
+        ].join('\n'), ro('full'));
+        if (v.ok) { builder = v.provider; verified = verified && /^\s*VERIFIED/i.test(v.text); aiMsg.project.ran = true; if (!/^\s*VERIFIED/i.test(v.text)) stat.problems.push(v.text.replace(/^\s*ISSUES:?/i, '').trim().slice(0, 200)); }
+        stat = { checked: stat.checked, problems: stat.problems };
+      }
       verifyNote = verified ? `${stat.checked} ${arabic ? 'ملف: كل الروابط موجودة والأكواد سليمة' : 'files: all links resolve and all code parses'}` : stat.problems.slice(0, 3).join(' · ');
       aiMsg.project.verified = verified;
 
@@ -734,7 +767,7 @@ class Orchestrator {
     } catch (e) {
       const cancelled = controller.signal.aborted;
       aiMsg.status = cancelled ? 'cancelled' : 'failed';
-      if (!cancelled) aiMsg.error = e.failure && e.failure.message ? e.failure.message : String(e.message || e);
+      if (!cancelled && process.env.MAJLIS_DEBUG) console.error(e.stack); if (!cancelled) aiMsg.error = e.failure && e.failure.message ? e.failure.message : String(e.message || e);
       this.store.saveConversation(conv);
       send({ type: cancelled ? 'cancelled' : 'failed', error: aiMsg.error, trail: aiMsg.trail });
       return aiMsg;
