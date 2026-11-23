@@ -461,6 +461,7 @@ function pvRender(forceReload) {
   $('#pvEmpty').classList.toggle('hidden', !!PV.entry || !showView && PV.files.length > 0);
   $('#pvTabView').classList.toggle('on', showView); $('#pvTabFiles').classList.toggle('on', !showView);
   const url = pvUrl();
+  if (!url) { $('#pvFrame').removeAttribute('src'); $('#pvFrame').removeAttribute('data-url'); }
   if (url && (forceReload || $('#pvFrame').getAttribute('data-url') !== url)) { $('#pvFrame').setAttribute('data-url', url); $('#pvFrame').src = url + '?t=' + Date.now(); }
   $('#pvFiles').replaceChildren(...PV.files.map((f) => h('div', { class: 'f', onclick: () => api.ws.openPath(PV.dir + '/' + f.path) }, h('span', {}, f.path), h('i', {}, fmtTok(f.size) + 'B'))));
 }

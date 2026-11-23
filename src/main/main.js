@@ -228,7 +228,7 @@ function registerIpc() {
     const { readProjectMemory } = require('../core/workspace');
     return { dir, files: snap.files, entry: snap.entry, hasRules: !!readProjectMemory(dir) };
   });
-  h('ws:export-zip', (conversationId) => { const z = exportZip(orch.cwdFor(conversationId), app.getPath('downloads')); shell.showItemInFolder(z); return z; });
+  h('ws:export-zip', (conversationId) => { const z = exportZip(orch.cwdFor(conversationId), app.getPath('downloads'), (store.getConversation(conversationId) || {}).title); shell.showItemInFolder(z); return z; });
   h('ws:publish', (conversationId) => { const dir = orch.cwdFor(conversationId); shell.openExternal('https://app.netlify.com/drop'); shell.openPath(dir); return true; });
   h('conv:export-md', async (conversationId) => {
     const c = store.getConversation(conversationId); if (!c) return null;

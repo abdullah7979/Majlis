@@ -86,9 +86,9 @@ function verifyStatic(dir) {
 }
 
 /** Packs the project folder into a .zip next to it (what you upload to any free host, or send to someone). */
-function exportZip(dir, outDir) {
+function exportZip(dir, outDir, title) {
   const { spawnSync } = require('child_process');
-  const name = path.basename(dir).replace(/[^\w\u0600-\u06FF-]+/g, '_') || 'project';
+  const name = String(title || path.basename(dir)).slice(0, 40).replace(/[^\w\u0600-\u06FF-]+/g, '_') || 'project';
   const out = path.join(outDir || path.dirname(dir), `${name}-${new Date().toISOString().slice(0, 10)}.zip`);
   try { fs.rmSync(out, { force: true }); } catch (_) {}
   const r = process.platform === 'win32'

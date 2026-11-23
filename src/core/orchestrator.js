@@ -679,6 +679,7 @@ class Orchestrator {
           `Now do ONLY step ${i + 1} of ${steps.length}: ${steps[i].title} — ${steps[i].detail}`,
           steps[i].files.length ? `Files for this step: ${steps[i].files.join(', ')}` : '',
           parallelNote || '',
+          'Never invent photo URLs: a guessed image link can show a completely unrelated picture. Use only inline SVG/CSS illustrations or local files you create, unless the user gave exact image URLs.',
           'Work directly in the current folder: create and edit real, complete files (no placeholders, no TODOs). Keep earlier steps\' work working. Do not ask questions.',
           'When finished, reply with ONE short line saying what you did, written in the same language as the request.',
           'You cannot run node, npx, python or a browser here (commands are not approved), so do not try; write the code carefully instead. Majlis checks syntax and links itself afterwards.',
