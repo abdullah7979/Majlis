@@ -17,7 +17,7 @@ const { readProjectMemory, collectFiles } = require('./workspace');
 const FOLLOW_UP_RE = /^\s*(نعم|ايوه|إيوه|أيوه|ايه|إيه|اي|أي|اوكي|أوكي|تمام|طيب|زين|حلو|ممتاز|كمل|كمّل|استمر|كمله|كملها|كمّلها|زد|زيد|أكثر|اكثر|عدل|عدّل|عدلها|عدّلها|غيره|غيّره|غيرها|سو|سوه|سوّه|سوها|سويها|ابدأ|ابدا|يلا|نفذ|نفّذ|طبق|طبّق|جرب|جرّب|صحح|صلحها|صلّحها|لا|ok|okay|yes|yep|sure|continue|go on|go ahead|do it|more|again|retry|fix it|no)(?=$|[\s.,!؟?،])/i;
 const LEARN_CUE_RE = /(أنا|انا|احب|أحب|ابغى|أبغى|ابي|أبي|أفضّل|افضل|لا تسو|لا تكتب|دايم|دائم|دايما|دائما|مشروعي|شغلي|عملي|وظيفتي|اشتغل|أشتغل|اسمي|عندي|بالعربي|باختصار|مختصر|\bI(?: am|'m| prefer| like| want| work)\b|\b(always|never|my (job|project|company|name))\b)/i;
 const SECRET_RE = /(sk-|mj-|password|passwd|كلمة (المرور|السر)|api[_ ]?key|token\b|\b\d{12,}\b)/i;
-const IMAGE_EXT = /\.(png|jpe?g|webp|gif)$/i;
+const IMAGE_EXT = /\.(png|jpe?g|webp|gif|svg|bmp)$/i;
 
 const MAX_MSG_CHARS = 8000;
 const MAX_CONTEXT_CHARS = 60000;
@@ -267,7 +267,8 @@ class Orchestrator {
     if (rules) prompt += `(Project rules from MAJLIS.md — follow them:\n${rules})\n\n`;
     if (this.isSandboxed(conv)) {
       prompt += '(You work in a private sandbox folder that belongs to this chat. To give the user a file, a website, a document or a design, create it as a real file in the CURRENT folder: Majlis shows it to the user right inside the chat. ' +
-        'Never read, list, search, open or change anything outside the current folder, never touch the user\'s other files or system settings, and never try to open programs or windows on the user\'s computer.)\n\n';
+        'Never read, list, search, open or change anything outside the current folder, never touch the user\'s other files or system settings, and never try to open programs or windows on the user\'s computer. ' +
+        'Do NOT write file paths, folder names or file:// links in your answer: just say what you made and that it is shown below, because Majlis displays the files to the user automatically.)\n\n';
     }
     if (promptEng) {
       prompt += '(Act as an expert prompt engineer. Write a ready-to-use prompt the user can paste into an AI model or tool: give it a clear role, ' +

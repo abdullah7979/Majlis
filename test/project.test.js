@@ -205,3 +205,12 @@ test('cloud transcription: audio goes to Gemini from the private folder and the 
     assert.deepEqual(fs.readdirSync(dir), []);
   } finally { delete process.env.FAKE_TRANSCRIPT; }
 });
+
+test('an SVG made by a model is collected as an image so the chat shows it (not a file path)', async () => {
+  const { store, orch } = await setup();
+  const conv = store.createConversation({ title: '' });
+  const cwd = orch.cwdFor(conv.id);
+  fs.writeFileSync(path.join(cwd, 'logo.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">' + '<rect width="200" height="200" fill="#c60"/>'.repeat(3) + '</svg>');
+  const imgs = orch.collectImages(conv.id, cwd, Date.now() - 5000);
+  assert.ok(imgs.some((f) => f.endsWith('logo.svg')));
+});

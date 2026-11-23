@@ -57,7 +57,11 @@ function setLanguage(lang) {
 marked.setOptions({ gfm: true, breaks: true });
 function renderMarkdown(el, text) {
   el.innerHTML = DOMPurify.sanitize(marked.parse(text || ''), { ADD_ATTR: ['target'] });
-  el.querySelectorAll('a').forEach((a) => { a.target = '_blank'; a.rel = 'noreferrer'; });
+  el.querySelectorAll('a').forEach((a) => {
+    const href = a.getAttribute('href') || '';
+    if (/^(file:|[a-zA-Z]:[\\/]|\/(Users|home|C:)|\\\\)/i.test(decodeURIComponent(href))) { a.replaceWith(h('span', {}, a.textContent)); return; } // never offer a link into the PC
+    a.target = '_blank'; a.rel = 'noreferrer';
+  });
   el.querySelectorAll('pre > code').forEach((code) => {
     const pre = code.parentElement;
     const lang = ((code.className.match(/language-([\w+#-]+)/) || [])[1]) || '';
@@ -339,7 +343,7 @@ function updateAiEl(el, m) {
   }
   if (m.project && m.project.steps && m.project.steps.length) el.append(projectEl(m));
   if (m.files && m.files.length && m.status === 'done') el.append(filesEl(m));
-  if (m.images && m.images.length) el.append(imagesEl(m.images));
+  { const imgs = [...new Set([...(m.images || []), ...((m.files || []).filter((f) => f.kind === 'image').map((f) => f.abs))])]; if (imgs.length) el.append(imagesEl(imgs)); }
   if (m.changes && m.changes.files && m.changes.files.length) el.append(changesEl(m));
   if (m.council && m.council.length) el.append(councilEl(m));
   if (m.status === 'failed') {
